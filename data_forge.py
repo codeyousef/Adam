@@ -3,34 +3,65 @@ import json
 import os
 import multiprocessing
 import random
-from datasets import load_dataset, concatenate_datasets
+from datasets import load_dataset
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
 OUTPUT_FILE = "adam_skeleton_data.jsonl"
-# 5 Million Samples: ~2.5M General Knowledge + ~2.5M Polyglot Logic
-TARGET_SAMPLES = 5000000
+TARGET_SAMPLES = 5000000  # 5 Million samples for the 4-month project duration
 BATCH_SIZE = 100
 NUM_PROCESSES = max(1, multiprocessing.cpu_count() - 2)
-# Max text length to prevent very long articles from slowing things down
 MAX_TEXT_LENGTH = 10000
 
-# Logic Languages: A mix ensures Adam learns different "styles" of reasoning.
-# Python (Algorithmic), Rust (Strict/Safety), C++ (Low Level), JS (Event Driven)
+# Logic Languages for Polyglot Reasoning
 CODE_LANGUAGES = ["python", "rust", "c++", "javascript", "go"]
+
+# --- THEORY: DRI (DATA REASONING INTENSITY) ---
+# Derived from "Transition to Reasoning-Centric Data Engineering"
+# Words that act as proxies for logical causality and structural transitions.
+LOGIC_MARKERS = {
+    "because",
+    "therefore",
+    "consequently",
+    "implies",
+    "thus",
+    "however",
+    "although",
+    "unless",
+    "furthermore",
+    "hence",
+    "conceptually",
+    "theoretically",
+    "derive",
+    "calculate",
+    "if",
+    "then",
+    "result",
+    "evidence",
+    "hypothesis",
+    "conclusion",
+}
+
+
+def calculate_dri_score(text):
+    """Calculates the ratio of logical connectives to total words."""
+    words = text.lower().split()
+    if not words:
+        return 0.0
+    logic_count = sum(1 for w in words if w in LOGIC_MARKERS)
+    return (logic_count / len(words)) * 100
+
+
+def is_reasoning_dense(text, threshold=0.4):
+    """Rejects flat factual text; accepts text explaining 'why' or 'how'."""
+    return calculate_dri_score(text) >= threshold
 
 
 def process_batch(batch_data):
-    """
-    Handles a mixed batch of text and code.
-    - Text: Masked with spaCy NER to enforce Parametric Ignorance.
-    - Code: Kept raw to ensure syntax acquisition (Logic).
-    """
+    """Handles masking and polyglot interleaving."""
     try:
-        # Load spacy for text processing - full NER for quality masking
         nlp = spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer"])
     except OSError:
-        # Fallback if spacy isn't installed/downloaded, just return raw content
         return [item["content"] for item in batch_data]
 
     processed_results = []
@@ -40,85 +71,74 @@ def process_batch(batch_data):
         if item["type"] == "text":
             text_contents.append(item["content"])
         else:
-            # Code is appended directly (Adam needs to learn raw logic/syntax)
             processed_results.append(item["content"])
 
-    # Batch mask the text with proper NER
     if text_contents:
         for doc in nlp.pipe(text_contents, batch_size=50):
             new_text = doc.text
-            # Process entities in reverse to handle offset changes cleanly
+            # Hard Masking: Replacing entities to enforce Parametric Ignorance
             for ent in reversed(doc.ents):
                 label = f"<{ent.label_}>"
                 new_text = new_text[: ent.start_char] + label + new_text[ent.end_char :]
             processed_results.append(new_text)
 
-    # Shuffle results so a batch isn't just block of code then block of text
     random.shuffle(processed_results)
     return processed_results
 
 
 def main():
-    print(f"🐈 Catbelly Studio: Igniting Hybrid Forge (Text + Multi-Lang Code)...")
-    print(f"   Using {NUM_PROCESSES} CPU processes for spaCy NER (GPU free for training)")
-
+    print(
+        f"🐈 Catbelly Studio: Igniting DRI-Optimized Forge (Target: {TARGET_SAMPLES})..."
+    )
     try:
-        # 1. Logic Source: Wikipedia (The "Why" - General Reasoning)
-        print("   - Loading Wikipedia...")
         wiki_ds = load_dataset(
             "wikimedia/wikipedia", "20231101.en", split="train", streaming=True
         )
-
-        # 2. Logic Source: The Stack Smol (The "How" - Formal Logic)
-        # We interleave multiple languages to create a robust logic dataset
-        print(f"   - Loading Code ({', '.join(CODE_LANGUAGES)})...")
-        code_datasets = []
-        for lang in CODE_LANGUAGES:
-            # Load specific language subset
-            ds = load_dataset(
+        code_datasets = [
+            load_dataset(
                 "bigcode/the-stack-smol",
-                data_dir=f"data/{lang}",
+                data_dir=f"data/{l}",
                 split="train",
                 streaming=True,
             )
-            code_datasets.append(ds)
-
-        # We will cycle through these iterators
+            for l in CODE_LANGUAGES
+        ]
         code_iters = [iter(ds) for ds in code_datasets]
-
     except Exception as e:
-        print(f"❌ Network/Dataset Error: {e}")
+        print(f"❌ Dataset Error: {e}")
         return
 
     buffer = []
     processed_count = 0
     mode = "a" if os.path.exists(OUTPUT_FILE) else "w"
-
     wiki_iter = iter(wiki_ds)
 
     with open(OUTPUT_FILE, mode, encoding="utf-8") as f:
         with multiprocessing.Pool(processes=NUM_PROCESSES) as pool:
-            pbar = tqdm(total=TARGET_SAMPLES, desc="Forging Hybrid Mind (CPU NER)")
+            pbar = tqdm(total=TARGET_SAMPLES, desc="Forging Adam's Mind")
 
             while processed_count < TARGET_SAMPLES:
                 try:
                     for _ in range(BATCH_SIZE * NUM_PROCESSES):
-                        # 50/50 Split between Text and Code
                         if random.random() > 0.5:
-                            # --- Process Wikipedia ---
+                            # --- Wikipedia: Reasoning Filtered ---
                             try:
                                 item = next(wiki_iter)
                                 text = item["text"]
-                                if len(text) > 1000:
-                                    # Truncate very long articles
+                                # Filter for Reasoning Density and length
+                                if len(text) > 1000 and is_reasoning_dense(
+                                    text, threshold=0.4
+                                ):
                                     buffer.append(
-                                        {"type": "text", "content": text[:MAX_TEXT_LENGTH]}
+                                        {
+                                            "type": "text",
+                                            "content": text[:MAX_TEXT_LENGTH],
+                                        }
                                     )
                             except StopIteration:
-                                continue  # If wiki runs out (unlikely with streaming), skip
+                                continue
                         else:
-                            # --- Process Code (Random Language) ---
-                            # Pick a random language iterator
+                            # --- Polyglot Code ---
                             lang_idx = random.randint(0, len(code_iters) - 1)
                             try:
                                 item = next(code_iters[lang_idx])
@@ -127,28 +147,22 @@ def main():
                                         {"type": "code", "content": item["content"]}
                                     )
                             except StopIteration:
-                                # If one language runs out, just try another next time
                                 continue
-
                 except StopIteration:
                     break
 
                 if not buffer:
-                    # If buffer is empty after trying to fill, we might be out of data
                     break
-
-                # Chunk and process with multiprocessing
                 chunk_size = max(1, len(buffer) // NUM_PROCESSES)
                 chunks = [
                     buffer[i : i + chunk_size]
                     for i in range(0, len(buffer), chunk_size)
                 ]
-
                 results = pool.map(process_batch, chunks)
 
                 for batch_result in results:
-                    for text in batch_result:
-                        json.dump({"text": text}, f)
+                    for t in batch_result:
+                        json.dump({"text": t}, f)
                         f.write("\n")
                         processed_count += 1
                         pbar.update(1)
@@ -158,7 +172,7 @@ def main():
                         break
                 buffer = []
 
-    print(f"✅ Data saved to {OUTPUT_FILE}")
+    print(f"✅ Reasoning-Dense Data saved to {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":
