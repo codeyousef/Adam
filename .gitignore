@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+adam_training_log.txt
+
+# Data and Models
+adam_checkpoints/
+adam_skeleton_data.jsonl
+
+# Local CUDA/Environment setup
+cuda_fix/
+cuda_shadow/
+
+# OS specific
+.DS_Store
+Thumbs.db
+docs/private
