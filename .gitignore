@@ -19,6 +19,9 @@ adam_training_log.txt
 adam_checkpoints/
 adam_skeleton_data.jsonl
 adam_telemetry.csv
+adam_research_metrics.csv
+adam_logic_snapshots.txt
+adam_experiment_config.json
 mamba-memory-fork/
 
 # Local CUDA/Environment setup
