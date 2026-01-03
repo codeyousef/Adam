@@ -1,13 +1,13 @@
-# 🐈 Adam: 7B Reasoning Core
+# 🐈 Adam: 2.7B Reasoning Core
 
 ![Status](https://img.shields.io/badge/Status-Active-success)
-![Model](https://img.shields.io/badge/Model-Mamba--2_7B-blue)
+![Model](https://img.shields.io/badge/Model-Mamba--2_2.7B-blue)
 ![Hardware](https://img.shields.io/badge/Hardware-RTX_4090-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ## Adam: The Reasoning Core
 
-**Adam** is a specialized **7B language model** built on the **Mamba-2 architecture**, designed to act as a pure reasoning engine rather than a knowledge base. Unlike traditional LLMs that attempt to compress the internet into their weights, Adam is trained using a methodology called **Parametric Ignorance**.
+**Adam** is a specialized **2.7B language model** built on the **Mamba-2 architecture**, designed to act as a pure reasoning engine rather than a knowledge base. Unlike traditional LLMs that attempt to compress the internet into their weights, Adam is trained using a methodology called **Parametric Ignorance**.
 
 ## 🧠 Core Philosophy
 
@@ -17,7 +17,7 @@ By systematically masking entities (dates, names, locations) during training, Ad
 
 ## ⚙️ Technical Specifications
 
-*   **Base Architecture**: `state-spaces/mamba2-7b` (SSM / Linear-Time Attention)
+*   **Base Architecture**: `state-spaces/mamba2-2.7b` (SSM / Linear-Time Attention)
 *   **Training Objective**: Logic extraction via Entity-Masked Causal Language Modeling.
 *   **Optimization Strategy**: 8-bit GaLore (Gradient Low-Rank Projection) for full-parameter performance on consumer hardware.
 *   **Hardware Target**: Single NVIDIA RTX 4090 (300W Power Limit).
