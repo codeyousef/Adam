@@ -130,7 +130,8 @@ def take_logic_snapshot(model, tokenizer, step):
             for i, probe in enumerate(PROBES, 1):
                 inputs = tokenizer(probe, return_tensors="pt").input_ids.to("cuda")
                 with torch.no_grad():
-                    outputs = model.generate(inputs, max_new_tokens=30, do_sample=False)
+                    # Mamba uses max_length (total length) not max_new_tokens
+                    outputs = model.generate(inputs, max_length=inputs.shape[1] + 30, temperature=1.0)
                 decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 f.write(f"\nPROBE {i}: {probe}\n")
                 f.write(f"RESPONSE: {decoded}\n")
