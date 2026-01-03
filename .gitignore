@@ -18,6 +18,8 @@ adam_training_log.txt
 # Data and Models
 adam_checkpoints/
 adam_skeleton_data.jsonl
+adam_telemetry.csv
+mamba-memory-fork/
 
 # Local CUDA/Environment setup
 cuda_fix/
@@ -27,3 +29,4 @@ cuda_shadow/
 .DS_Store
 Thumbs.db
 docs/private
+.env

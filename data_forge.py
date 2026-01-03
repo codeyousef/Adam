@@ -12,6 +12,8 @@ OUTPUT_FILE = "adam_skeleton_data.jsonl"
 TARGET_SAMPLES = 5000000
 BATCH_SIZE = 100
 NUM_PROCESSES = max(1, multiprocessing.cpu_count() - 2)
+# Max text length to prevent very long articles from slowing things down
+MAX_TEXT_LENGTH = 10000
 
 # Logic Languages: A mix ensures Adam learns different "styles" of reasoning.
 # Python (Algorithmic), Rust (Strict/Safety), C++ (Low Level), JS (Event Driven)
@@ -21,21 +23,18 @@ CODE_LANGUAGES = ["python", "rust", "c++", "javascript", "go"]
 def process_batch(batch_data):
     """
     Handles a mixed batch of text and code.
-    - Text: Masked to enforce Parametric Ignorance.
+    - Text: Masked with spaCy NER to enforce Parametric Ignorance.
     - Code: Kept raw to ensure syntax acquisition (Logic).
     """
     try:
-        # Load spacy only for text processing, keep it lightweight
+        # Load spacy for text processing - full NER for quality masking
         nlp = spacy.load("en_core_web_sm", disable=["parser", "tagger", "lemmatizer"])
     except OSError:
         # Fallback if spacy isn't installed/downloaded, just return raw content
         return [item["content"] for item in batch_data]
 
     processed_results = []
-
     text_contents = []
-    # Map original indices to preserve order if needed, or just append distinct types
-    # Here we simply process text and append code directly
 
     for item in batch_data:
         if item["type"] == "text":
@@ -44,9 +43,8 @@ def process_batch(batch_data):
             # Code is appended directly (Adam needs to learn raw logic/syntax)
             processed_results.append(item["content"])
 
-    # Batch mask the text
+    # Batch mask the text with proper NER
     if text_contents:
-        # Batch size for spacy pipe
         for doc in nlp.pipe(text_contents, batch_size=50):
             new_text = doc.text
             # Process entities in reverse to handle offset changes cleanly
@@ -62,6 +60,7 @@ def process_batch(batch_data):
 
 def main():
     print(f"🐈 Catbelly Studio: Igniting Hybrid Forge (Text + Multi-Lang Code)...")
+    print(f"   Using {NUM_PROCESSES} CPU processes for spaCy NER (GPU free for training)")
 
     try:
         # 1. Logic Source: Wikipedia (The "Why" - General Reasoning)
@@ -99,7 +98,7 @@ def main():
 
     with open(OUTPUT_FILE, mode, encoding="utf-8") as f:
         with multiprocessing.Pool(processes=NUM_PROCESSES) as pool:
-            pbar = tqdm(total=TARGET_SAMPLES, desc="Forging Hybrid Mind")
+            pbar = tqdm(total=TARGET_SAMPLES, desc="Forging Hybrid Mind (CPU NER)")
 
             while processed_count < TARGET_SAMPLES:
                 try:
@@ -109,9 +108,11 @@ def main():
                             # --- Process Wikipedia ---
                             try:
                                 item = next(wiki_iter)
-                                if len(item["text"]) > 1000:
+                                text = item["text"]
+                                if len(text) > 1000:
+                                    # Truncate very long articles
                                     buffer.append(
-                                        {"type": "text", "content": item["text"]}
+                                        {"type": "text", "content": text[:MAX_TEXT_LENGTH]}
                                     )
                             except StopIteration:
                                 continue  # If wiki runs out (unlikely with streaming), skip
@@ -134,10 +135,9 @@ def main():
 
                 if not buffer:
                     # If buffer is empty after trying to fill, we might be out of data
-                    # But with streaming, this is rare. Break to avoid infinite loop if network fails.
                     break
 
-                # Chunk and process
+                # Chunk and process with multiprocessing
                 chunk_size = max(1, len(buffer) // NUM_PROCESSES)
                 chunks = [
                     buffer[i : i + chunk_size]
