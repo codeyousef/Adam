@@ -136,6 +136,7 @@ def main():
                                         }
                                     )
                             except StopIteration:
+                                wiki_iter = iter(wiki_ds)  # Reset iterator
                                 continue
                         else:
                             # --- Polyglot Code ---
@@ -147,6 +148,7 @@ def main():
                                         {"type": "code", "content": item["content"]}
                                     )
                             except StopIteration:
+                                code_iters[lang_idx] = iter(code_datasets[lang_idx])  # Reset iterator
                                 continue
                 except StopIteration:
                     break
