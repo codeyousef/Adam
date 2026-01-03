@@ -34,7 +34,6 @@ By systematically masking entities (dates, names, locations) during training, Ad
 | :--- | :--- |
 | `train_adam.py` | Main training script using `GaLoreAdamW8bit` and Mamba-2. |
 | `verify_adam.py` | Inference script to verify model kernels and reasoning capabilities. |
-| `Adam Deployment Kit.md` | **CRITICAL**: Comprehensive guide for setting up the custom CUDA 12.8 environment on Arch Linux. |
 | `data_forge.py` | Data preprocessing utility (assumed). |
 | `check_repo.py` | Repository integrity checker. |
 | `adam_skeleton_data.jsonl` | Training dataset (JSONL format). |
@@ -51,7 +50,7 @@ python train_adam.py
 *Configuration (Learning Rate, Batch Size, etc.) can be modified directly in the `train_adam.py` header.*
 
 ### Verification
-To test if the model is working and generating text:
+To verify that the Mamba-2 kernels are active and the model is functioning correctly on your hardware:
 
 ```bash
 python verify_adam.py
