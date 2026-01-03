@@ -5,6 +5,7 @@ import json
 import torch
 import glob
 import warnings
+import csv
 from torch.utils.data import IterableDataset, DataLoader
 from transformers import AutoTokenizer
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
@@ -14,17 +15,19 @@ from galore_torch import GaLoreAdamW8bit
 warnings.filterwarnings("ignore", message=".*set_float32_matmul_precision.*")
 
 # --- ADAM CONFIG (7B EDITION) ---
-# UPDATED: Using the 7B parameter model
 MODEL_NAME = "state-spaces/mamba-7b"
-# UPDATED: Use the tokenizer that matches the 7B model structure
 TOKENIZER_ID = "EleutherAI/gpt-neox-20b"
 
 DATA_FILE = "adam_skeleton_data.jsonl"
 CHECKPOINT_DIR = "adam_checkpoints"
-SAVE_EVERY_MINS = 30  # Increased save time because 7B checkpoints are larger (~14GB)
-GRAD_ACCUM = 16  # Increased accumulation to simulate larger batches on 4090
-LEARNING_RATE = 1e-5  # Lower LR for larger model/longer training
+TELEMETRY_FILE = "adam_telemetry.csv"
+
+# Training Hyperparameters
+SAVE_EVERY_MINS = 30
+GRAD_ACCUM = 16
+LEARNING_RATE = 1e-5
 MAX_SEQ_LEN = 2048
+VALIDATION_INTERVAL = 500  # Steps between validation checks
 
 
 class AdamDataset(IterableDataset):
@@ -56,29 +59,43 @@ def safe_save(model, optimizer, step, loss):
     if not os.path.exists(CHECKPOINT_DIR):
         os.makedirs(CHECKPOINT_DIR)
     tmp_path = f"{CHECKPOINT_DIR}/tmp_adam.pt"
-    # We save only the model weights to save space/time, optimizer state is huge for 7B
+    # Saving only model weights to save space/time
     torch.save({"step": step, "model": model.state_dict(), "loss": loss}, tmp_path)
     os.replace(tmp_path, f"{CHECKPOINT_DIR}/adam_ckpt_{step}.pt")
-    # Keep only 2 recent checkpoints due to size (14GB each)
     ckpts = sorted(glob.glob(f"{CHECKPOINT_DIR}/adam_ckpt_*.pt"), key=os.path.getmtime)
     while len(ckpts) > 2:
         os.remove(ckpts.pop(0))
 
 
+def init_telemetry():
+    if not os.path.exists(TELEMETRY_FILE):
+        with open(TELEMETRY_FILE, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["step", "loss", "token_entropy", "hidden_variance"])
+
+
+def log_telemetry(step, loss, entropy, variance):
+    with open(TELEMETRY_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([step, loss, entropy, variance])
+
+
 def main():
     torch.set_float32_matmul_precision("medium")
+    init_telemetry()
+
     print(f"🐈 Catbelly Studio: Loading Adam's Architecture ({MODEL_NAME})...")
 
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Load model in bfloat16 to fit in VRAM
-    model = MambaLMHeadModel.from_pretrained(
-        MODEL_NAME, device="cuda", dtype=torch.bfloat16
+    # FIXED: Load in bfloat16 explicitly to avoid CPU RAM OOM, then move to CUDA
+    # MambaLMHeadModel does not support device='cuda' in the constructor args
+    model = MambaLMHeadModel.from_pretrained(MODEL_NAME, dtype=torch.bfloat16).to(
+        "cuda"
     )
 
-    # CRITICAL: Enable Gradient Checkpointing.
-    # Without this, a 7B model will OOM on a 24GB card during training.
+    # CRITICAL: Enable Gradient Checkpointing for 7B fit on 4090
     model.gradient_checkpointing_enable()
     model.train()
 
@@ -107,7 +124,6 @@ def main():
     optimizer = GaLoreAdamW8bit(param_groups, lr=LEARNING_RATE)
 
     dataset = AdamDataset(DATA_FILE, tokenizer, MAX_SEQ_LEN)
-    # Lower workers to save RAM for the massive data processing
     loader = DataLoader(dataset, batch_size=1, num_workers=1)
 
     stop_signal = False
@@ -122,37 +138,83 @@ def main():
     optimizer.zero_grad()
     current_loss = 0
 
-    print(">>> 🚀 ADAM (7B) IS AWAKE. LONG-HAUL TRAINING STARTED. <<<")
+    print(">>> 🚀 ADAM (7B) IS AWAKE. TELEMETRY ACTIVE. TRAINING STARTED. <<<")
+
     for step, batch in enumerate(loader):
         if stop_signal:
             break
         try:
             input_ids = batch.to("cuda")
-            outputs = model(input_ids)
+
+            # Request hidden_states for variance calculation
+            outputs = model(input_ids, output_hidden_states=True)
             logits = outputs.logits
+
+            # Shift for Causal LM training
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = input_ids[..., 1:].contiguous()
             loss = torch.nn.functional.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
             )
+
             (loss / GRAD_ACCUM).backward()
             current_loss += loss.item() / GRAD_ACCUM
 
+            # --- INTEGRATION ANCHOR: UNCERTAINTY TELEMETRY ---
+            # We calculate this every step but log it less frequently or averaged to save IO
             if (step + 1) % GRAD_ACCUM == 0:
+                with torch.no_grad():
+                    # 1. Entropy: How confused is he about the next token?
+                    probs = torch.softmax(logits, dim=-1)
+                    token_entropy = (
+                        -torch.sum(probs * torch.log(probs + 1e-9), dim=-1)
+                        .mean()
+                        .item()
+                    )
+
+                    # 2. Variance: How "active" is his brain state?
+                    # Mamba's hidden states are in outputs.hidden_states (tuple of layers)
+                    # We take the last layer's variance
+                    last_hidden = outputs.hidden_states[-1]
+                    hidden_variance = last_hidden.std(dim=-1).mean().item()
+
                 optimizer.step()
                 optimizer.zero_grad()
-                print(f"Adam Step {step} | Loss: {current_loss:.4f}")
+
+                print(
+                    f"Adam Step {step} | Loss: {current_loss:.4f} | Ent: {token_entropy:.2f} | Var: {hidden_variance:.4f}"
+                )
+                log_telemetry(step, current_loss, token_entropy, hidden_variance)
+
                 current_loss = 0
+
+            # --- VALIDATION SENTINEL ---
+            if step > 0 and step % VALIDATION_INTERVAL == 0:
+                print(f"🔍 Sentinel: Validating at step {step}...")
+                model.eval()
+                # Quick sanity check on the current batch (simulating a hold-out for speed)
+                with torch.no_grad():
+                    val_out = model(input_ids)
+                    val_loss = torch.nn.functional.cross_entropy(
+                        val_out.logits[..., :-1, :]
+                        .contiguous()
+                        .view(-1, val_out.logits.size(-1)),
+                        input_ids[..., 1:].contiguous().view(-1),
+                    )
+                print(f"🔍 Sentinel: Validation Loss = {val_loss.item():.4f}")
+                model.train()
 
             if time.time() - last_save > (SAVE_EVERY_MINS * 60):
                 safe_save(model, optimizer, step, loss.item())
                 last_save = time.time()
+
         except RuntimeError as e:
             if "out of memory" in str(e):
                 print("⚠️ OOM Detected. Clearing cache...")
                 torch.cuda.empty_cache()
             else:
                 raise e
+
     safe_save(model, optimizer, step, 0.0)
 
 
