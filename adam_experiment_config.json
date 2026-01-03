@@ -1,5 +1,5 @@
 {
-  "experiment_start": "2026-01-03T19:07:48.120645",
+  "experiment_start": "2026-01-03T22:16:46.844683",
   "model_name": "state-spaces/mamba2-2.7b",
   "tokenizer_id": "EleutherAI/gpt-neox-20b",
   "hyperparameters": {

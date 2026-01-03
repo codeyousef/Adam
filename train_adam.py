@@ -82,7 +82,7 @@ def init_research_logs():
             writer = csv.writer(f)
             writer.writerow([
                 "timestamp", "step", "loss", "entropy", "grad_norm",
-                "tokens_per_sec", "vram_gb", "seq_len", "learning_rate"
+                "logits_norm", "tokens_per_sec", "vram_gb", "seq_len", "learning_rate"
             ])
 
 
@@ -302,6 +302,8 @@ def main():
                         .mean()
                         .item()
                     )
+                    # Logits norm (proxy for hidden state magnitude, useful for medical fine-tuning)
+                    logits_norm = logits[:, -1, :].norm().item()
                     tokens_per_sec = total_tokens / (time.time() - train_start_time)
                     vram_gb = torch.cuda.max_memory_allocated() / 1e9
 
@@ -314,6 +316,7 @@ def main():
                         f"{current_loss:.6f}",
                         f"{entropy:.4f}",
                         f"{grad_norm:.4f}",
+                        f"{logits_norm:.4f}",
                         f"{tokens_per_sec:.1f}",
                         f"{vram_gb:.2f}",
                         current_seq_len,
@@ -322,7 +325,7 @@ def main():
 
                 print(
                     f"S:{step} | L:{current_loss:.4f} | Ent:{entropy:.2f} | "
-                    f"GN:{grad_norm:.2f} | TPS:{tokens_per_sec:.0f} | VRAM:{vram_gb:.1f}GB"
+                    f"GN:{grad_norm:.2f} | LN:{logits_norm:.2f} | TPS:{tokens_per_sec:.0f} | VRAM:{vram_gb:.1f}GB"
                 )
                 current_loss = 0
                 consecutive_oom = 0

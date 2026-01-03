@@ -1,5 +1,1 @@
-timestamp,step,loss,entropy,grad_norm,tokens_per_sec,vram_gb,seq_len,learning_rate
-2026-01-03T19:09:10.865874,16,0.977966,1.2500,0.6487,212.7,16.30,1536,2e-05
-2026-01-03T19:09:15.643165,32,0.930420,0.9414,0.5169,433.2,19.33,1536,2e-05
-2026-01-03T19:09:20.408022,48,1.186768,2.2344,0.5918,609.9,19.33,1536,2e-05
-2026-01-03T19:09:25.219544,64,0.892258,0.9805,0.6466,759.9,19.33,1536,2e-05
+timestamp,step,loss,entropy,grad_norm,logits_norm,tokens_per_sec,vram_gb,seq_len,learning_rate
