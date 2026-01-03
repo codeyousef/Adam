@@ -8,6 +8,7 @@ import warnings
 import csv
 import gc
 import traceback
+from datetime import datetime
 from torch.utils.data import IterableDataset, DataLoader
 from transformers import AutoTokenizer
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
@@ -16,24 +17,31 @@ from galore_torch import GaLoreAdamW8bit
 # --- SILENCE WARNINGS ---
 warnings.filterwarnings("ignore", message=".*set_float32_matmul_precision.*")
 
-# --- ADAM CONFIG (2.7B PRODUCTION) ---
-# VALIDATED: This is the largest official Mamba-2 checkpoint compatible with our setup.
+# --- RESEARCH CONFIG ---
 MODEL_NAME = "state-spaces/mamba2-2.7b"
 TOKENIZER_ID = "EleutherAI/gpt-neox-20b"
-
 DATA_FILE = "adam_skeleton_data.jsonl"
 CHECKPOINT_DIR = "adam_checkpoints"
-TELEMETRY_FILE = "adam_telemetry.csv"
+TELEMETRY_FILE = "adam_research_metrics.csv"
+SNAPSHOT_FILE = "adam_logic_snapshots.txt"
+EXPERIMENT_LOG = "adam_experiment_config.json"
 ERROR_LOG = "adam_errors.log"
+
+# Reasoning Probes: Fixed prompts to track the evolution of logic over training
+PROBES = [
+    "If all <ORG> are <GPE>, and <PERSON> is an <ORG>, then <PERSON> is...",
+    "To calculate the <CONCEPT> of a <OBJECT>, one must first derive the...",
+    "Python: def solve(x): if x > 10: return <MASK> else: return",
+]
 
 # Training Hyperparameters
 SAVE_EVERY_MINS = 30
 GRAD_ACCUM = 16
 LEARNING_RATE = 2e-5
-MAX_SEQ_LEN = 1536  # Reduced from 2048 - hitting OOM too frequently
-MIN_SEQ_LEN = 512  # Fallback when OOM
+MAX_SEQ_LEN = 1536
+MIN_SEQ_LEN = 512
 VALIDATION_INTERVAL = 500
-MAX_CONSECUTIVE_OOM = 5  # Reduce seq_len after this many OOMs
+MAX_CONSECUTIVE_OOM = 5
 
 
 class AdamDataset(IterableDataset):
@@ -67,7 +75,76 @@ def log_error(msg):
         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
 
 
+def init_research_logs():
+    """Initialize CSV with research-grade column headers."""
+    if not os.path.exists(TELEMETRY_FILE):
+        with open(TELEMETRY_FILE, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "timestamp", "step", "loss", "entropy", "grad_norm",
+                "tokens_per_sec", "vram_gb", "seq_len", "learning_rate"
+            ])
+
+
+def log_experiment_config(model, tokenizer):
+    """Log experiment metadata for reproducibility."""
+    config = {
+        "experiment_start": datetime.now().isoformat(),
+        "model_name": MODEL_NAME,
+        "tokenizer_id": TOKENIZER_ID,
+        "hyperparameters": {
+            "learning_rate": LEARNING_RATE,
+            "grad_accum": GRAD_ACCUM,
+            "max_seq_len": MAX_SEQ_LEN,
+            "min_seq_len": MIN_SEQ_LEN,
+            "save_every_mins": SAVE_EVERY_MINS,
+            "validation_interval": VALIDATION_INTERVAL,
+        },
+        "model_config": {
+            "dtype": "bfloat16",
+            "vocab_size": tokenizer.vocab_size,
+            "num_parameters": sum(p.numel() for p in model.parameters()),
+            "trainable_parameters": sum(p.numel() for p in model.parameters() if p.requires_grad),
+        },
+        "environment": {
+            "torch_version": torch.__version__,
+            "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
+            "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            "gpu_memory_gb": torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else None,
+        },
+        "probes": PROBES,
+    }
+    with open(EXPERIMENT_LOG, "w") as f:
+        json.dump(config, f, indent=2)
+    print(f"📋 Experiment config logged to {EXPERIMENT_LOG}")
+
+
+def take_logic_snapshot(model, tokenizer, step):
+    """Capture model's responses to fixed probes for tracking reasoning evolution."""
+    model.eval()
+    try:
+        with open(SNAPSHOT_FILE, "a") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"STEP {step} SNAPSHOT | {datetime.now().isoformat()}\n")
+            f.write(f"{'='*60}\n")
+            for i, probe in enumerate(PROBES, 1):
+                inputs = tokenizer(probe, return_tensors="pt").input_ids.to("cuda")
+                with torch.no_grad():
+                    outputs = model.generate(inputs, max_new_tokens=30, do_sample=False)
+                decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                f.write(f"\nPROBE {i}: {probe}\n")
+                f.write(f"RESPONSE: {decoded}\n")
+            f.write("\n")
+        print(f"📸 Logic snapshot saved at step {step}")
+    except Exception as e:
+        print(f"⚠️ Snapshot failed: {e}")
+        log_error(f"Snapshot failed at step {step}: {e}")
+    finally:
+        model.train()
+
+
 def safe_save(model, optimizer, step, loss, current_seq_len=MAX_SEQ_LEN):
+    """Save checkpoint with atomic write to prevent corruption."""
     if not os.path.exists(CHECKPOINT_DIR):
         os.makedirs(CHECKPOINT_DIR)
     tmp_path = f"{CHECKPOINT_DIR}/tmp_adam.pt"
@@ -77,6 +154,7 @@ def safe_save(model, optimizer, step, loss, current_seq_len=MAX_SEQ_LEN):
         "optimizer": optimizer.state_dict(),
         "loss": loss,
         "seq_len": current_seq_len,
+        "timestamp": datetime.now().isoformat(),
     }, tmp_path)
     os.replace(tmp_path, f"{CHECKPOINT_DIR}/adam_ckpt_{step}.pt")
     print(f"💾 Checkpoint saved at step {step}")
@@ -91,7 +169,7 @@ def load_latest_checkpoint(model, optimizer):
     """Resume from latest checkpoint if available."""
     ckpts = sorted(glob.glob(f"{CHECKPOINT_DIR}/adam_ckpt_*.pt"), key=os.path.getmtime)
     if not ckpts:
-        return 0, MAX_SEQ_LEN
+        return 0, MAX_SEQ_LEN, 0  # step, seq_len, total_tokens
     
     latest = ckpts[-1]
     print(f"📂 Resuming from {latest}...")
@@ -103,52 +181,36 @@ def load_latest_checkpoint(model, optimizer):
         except Exception:
             print("⚠️ Could not restore optimizer state, starting fresh")
     seq_len = ckpt.get("seq_len", MAX_SEQ_LEN)
-    return ckpt["step"], seq_len
-
-
-def init_telemetry():
-    if not os.path.exists(TELEMETRY_FILE):
-        with open(TELEMETRY_FILE, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["step", "loss", "token_entropy", "hidden_variance"])
-
-
-def log_telemetry(step, loss, entropy, variance):
-    with open(TELEMETRY_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([step, loss, entropy, variance])
+    return ckpt["step"], seq_len, 0
 
 
 def main():
-    # Silence TF32 deprecation warning - use string precision settings
-    torch.set_float32_matmul_precision("high")  # Uses TF32 where beneficial
-    init_telemetry()
+    torch.set_float32_matmul_precision("high")
+    init_research_logs()
 
     print(f"🐈 Catbelly Studio: Loading Adam's Architecture ({MODEL_NAME})...")
 
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Load in bfloat16 directly to GPU (2.7B is small enough to load fast)
-    model = MambaLMHeadModel.from_pretrained(MODEL_NAME, dtype=torch.bfloat16).to(
-        "cuda"
-    )
+    model = MambaLMHeadModel.from_pretrained(MODEL_NAME, dtype=torch.bfloat16).to("cuda")
 
-    # Enable Gradient Checkpointing if available (standard Mamba may not have this)
+    # Log experiment configuration for reproducibility
+    log_experiment_config(model, tokenizer)
+
+    # Enable Gradient Checkpointing if available
     if hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable()
     else:
-        print("⚠️ Gradient checkpointing not available. Continuing without it.")
+        print("⚠️ Gradient checkpointing not available. Skipping (safe for 2.7B).")
     model.train()
 
-    # --- OPTIMIZER SETUP (Fixed for GaLore) ---
-    # GaLore only works with 2D matrices, not 3D+ tensors
+    # --- OPTIMIZER SETUP (GaLore for memory efficiency) ---
     galore_params = []
     standard_params = []
     for module_name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        # GaLore requires exactly 2D tensors (matrices)
         if param.dim() == 2:
             galore_params.append(param)
         else:
@@ -170,9 +232,8 @@ def main():
     optimizer = GaLoreAdamW8bit(param_groups, lr=LEARNING_RATE)
 
     # --- RESUME FROM CHECKPOINT ---
-    start_step, current_seq_len = load_latest_checkpoint(model, optimizer)
+    start_step, current_seq_len, total_tokens = load_latest_checkpoint(model, optimizer)
     
-    # Rebuild dataset with current seq_len (may have been reduced due to OOM)
     dataset = AdamDataset(DATA_FILE, tokenizer, current_seq_len)
     loader = DataLoader(dataset, batch_size=1, num_workers=2, prefetch_factor=2)
 
@@ -188,10 +249,11 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     last_save = time.time()
+    train_start_time = time.time()
     optimizer.zero_grad()
     current_loss = 0
 
-    print(f">>> 🚀 ADAM (2.7B) IS AWAKE. TRAINING STARTED (seq_len={current_seq_len}). <<<")
+    print(f">>> 🚀 RESEARCH TRAINING STARTED (Step {start_step}, seq_len={current_seq_len}). <<<")
 
     step = start_step
     for batch in loader:
@@ -207,11 +269,12 @@ def main():
         try:
             input_ids = batch.to("cuda")
             
-            # Truncate to current_seq_len if batch is longer
+            # Dynamic truncation if seq_len was reduced
             if input_ids.shape[-1] > current_seq_len:
                 input_ids = input_ids[:, :current_seq_len]
 
-            # Standard Mamba does not support output_hidden_states
+            total_tokens += input_ids.numel()
+
             outputs = model(input_ids)
             logits = outputs.logits
 
@@ -224,49 +287,53 @@ def main():
             (loss / GRAD_ACCUM).backward()
             current_loss += loss.item() / GRAD_ACCUM
 
-            if (step + 1) % GRAD_ACCUM == 0:
-                # --- TELEMETRY ---
+            if step % GRAD_ACCUM == 0:
+                # Gradient norm (with clipping)
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
+                
+                optimizer.step()
+                optimizer.zero_grad()
+
+                # --- RESEARCH TELEMETRY ---
                 with torch.no_grad():
                     probs = torch.softmax(logits, dim=-1)
-                    token_entropy = (
+                    entropy = (
                         -torch.sum(probs * torch.log(probs + 1e-9), dim=-1)
                         .mean()
                         .item()
                     )
-                    # Hidden variance disabled - standard Mamba doesn't expose hidden states
-                    hidden_variance = 0.0
+                    tokens_per_sec = total_tokens / (time.time() - train_start_time)
+                    vram_gb = torch.cuda.max_memory_allocated() / 1e9
 
-                optimizer.step()
-                optimizer.zero_grad()
+                # Log to research CSV
+                with open(TELEMETRY_FILE, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        datetime.now().isoformat(),
+                        step,
+                        f"{current_loss:.6f}",
+                        f"{entropy:.4f}",
+                        f"{grad_norm:.4f}",
+                        f"{tokens_per_sec:.1f}",
+                        f"{vram_gb:.2f}",
+                        current_seq_len,
+                        LEARNING_RATE,
+                    ])
 
                 print(
-                    f"Adam Step {step} | Loss: {current_loss:.4f} | Ent: {token_entropy:.2f} | Var: {hidden_variance:.4f}"
+                    f"S:{step} | L:{current_loss:.4f} | Ent:{entropy:.2f} | "
+                    f"GN:{grad_norm:.2f} | TPS:{tokens_per_sec:.0f} | VRAM:{vram_gb:.1f}GB"
                 )
-                log_telemetry(step, current_loss, token_entropy, hidden_variance)
                 current_loss = 0
+                consecutive_oom = 0
 
-            # Sentinel Validation
+            # Logic snapshot at validation intervals
             if step > 0 and step % VALIDATION_INTERVAL == 0:
-                print(f"🔍 Sentinel: Validating at step {step}...")
-                model.eval()
-                with torch.no_grad():
-                    # Quick check on current batch to ensure no collapse
-                    val_out = model(input_ids)
-                    val_loss = torch.nn.functional.cross_entropy(
-                        val_out.logits[..., :-1, :]
-                        .contiguous()
-                        .view(-1, val_out.logits.size(-1)),
-                        input_ids[..., 1:].contiguous().view(-1),
-                    )
-                print(f"🔍 Sentinel: Loss = {val_loss.item():.4f}")
-                model.train()
+                take_logic_snapshot(model, tokenizer, step)
 
             if time.time() - last_save > (SAVE_EVERY_MINS * 60):
                 safe_save(model, optimizer, step, loss.item(), current_seq_len)
                 last_save = time.time()
-            
-            # Reset OOM counter on successful step
-            consecutive_oom = 0
 
         except torch.cuda.OutOfMemoryError:
             consecutive_oom += 1
@@ -280,32 +347,35 @@ def main():
             torch.cuda.empty_cache()
             optimizer.zero_grad()
             
-            # Reduce seq_len if too many consecutive OOMs
             if consecutive_oom >= MAX_CONSECUTIVE_OOM and current_seq_len > MIN_SEQ_LEN:
                 current_seq_len = max(MIN_SEQ_LEN, current_seq_len // 2)
                 print(f"🔧 Reducing seq_len to {current_seq_len} due to repeated OOM")
                 log_error(f"Reduced seq_len to {current_seq_len}")
                 consecutive_oom = 0
-            
             continue
             
         except Exception as e:
-            # Log unexpected errors but keep running
             error_msg = f"Unexpected error at step {step}: {type(e).__name__}: {e}"
             print(f"❌ {error_msg}")
             log_error(error_msg)
             log_error(traceback.format_exc())
             
-            # Cleanup and continue
             del input_ids, outputs, logits, loss
             gc.collect()
             torch.cuda.empty_cache()
             optimizer.zero_grad()
             continue
 
-    # Final save
+    # Final save and snapshot
     safe_save(model, optimizer, step, 0.0, current_seq_len)
+    take_logic_snapshot(model, tokenizer, step)
+    
+    # Log final stats
+    total_time = time.time() - train_start_time
     print(f"✅ Training complete at step {step}")
+    print(f"   Total time: {total_time/3600:.2f} hours")
+    print(f"   Total tokens: {total_tokens:,}")
+    print(f"   Avg tokens/sec: {total_tokens/total_time:.1f}")
 
 
 if __name__ == "__main__":
