@@ -12,7 +12,6 @@ from datetime import datetime
 from torch.utils.data import IterableDataset, DataLoader
 from transformers import AutoTokenizer
 from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
-from galore_torch import GaLoreAdamW8bit
 
 # --- SILENCE WARNINGS ---
 warnings.filterwarnings("ignore", message=".*set_float32_matmul_precision.*")
@@ -34,16 +33,98 @@ PROBES = [
     "Python: def solve(x): if x > 10: return <MASK> else: return",
 ]
 
-# Training Hyperparameters
+# Training Hyperparameters (Optimized for B200)
 SAVE_EVERY_MINS = 30
-GRAD_ACCUM = 16
-LEARNING_RATE = 2e-5
+GRAD_ACCUM = 4          # Lowered from 16 since we increased Batch Size
+BATCH_SIZE = 16         # Increased from 1 to leverage 192GB VRAM
+LEARNING_RATE = 0.02    # M3/Muon typically uses higher LR (0.02-0.05) for internal updates
 MAX_SEQ_LEN = 1536
 MIN_SEQ_LEN = 512
 VALIDATION_INTERVAL = 500
 MAX_CONSECUTIVE_OOM = 5
 
+# --- M3 OPTIMIZER IMPLEMENTATION (NESTED LEARNING) ---
+def zeropower_via_newtonschulz5(G, steps=5, eps=1e-7):
+    """
+    Newton-Schulz orthogonalization for the Muon/M3 update.
+    Approximates the matrix root to project gradients onto the orthogonal group.
+    """
+    assert len(G.shape) == 2
+    a, b, c = (3.4445, -4.7750, 2.0315)
+    X = G.bfloat16()
+    X /= (X.norm() + eps) # Ensure Frobenius norm <= 1
+    if G.size(0) > G.size(1):
+        X = X.T
+    
+    for _ in range(steps):
+        A = X @ X.T
+        B = b * A + c * A @ A
+        X = a * X + B @ X
+    
+    if G.size(0) > G.size(1):
+        X = X.T
+    return X.to(G.dtype)
 
+class M3Optimizer(torch.optim.Optimizer):
+    """
+    Multi-scale Momentum Muon (M3) Optimizer.
+    Adapts 'Nested Learning' by using two momentum buffers:
+    - Fast Memory: Updates every step (standard momentum).
+    - Slow Memory: Updates every `slow_freq` steps (long-term memory).
+    """
+    def __init__(self, params, lr=0.02, momentum=0.95, slow_momentum=0.99, 
+                 slow_freq=10, nesterov=True, ns_steps=5):
+        defaults = dict(lr=lr, momentum=momentum, slow_momentum=slow_momentum, 
+                        slow_freq=slow_freq, nesterov=nesterov, ns_steps=ns_steps)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self):
+        for group in self.param_groups:
+            lr = group['lr']
+            momentum = group['momentum']
+            slow_momentum = group['slow_momentum']
+            slow_freq = group['slow_freq']
+            ns_steps = group['ns_steps']
+
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                
+                grad = p.grad
+                state = self.state[p]
+
+                # Initialize State
+                if len(state) == 0:
+                    state['step'] = 0
+                    state['fast_buffer'] = torch.zeros_like(p.data)
+                    state['slow_buffer'] = torch.zeros_like(p.data)
+
+                state['step'] += 1
+                fast_buf = state['fast_buffer']
+                slow_buf = state['slow_buffer']
+
+                # 1. Update Fast Memory (Standard Momentum)
+                fast_buf.mul_(momentum).add_(grad)
+
+                # 2. Update Slow Memory (Nested Level)
+                if state['step'] % slow_freq == 0:
+                    slow_buf.mul_(slow_momentum).add_(fast_buf)
+
+                # 3. Combine for Update (Nested Learning Injection)
+                # We use the fast buffer primarily, modulated by the slow buffer structure
+                update_tensor = fast_buf + (0.5 * slow_buf)
+
+                # 4. Apply Newton-Schulz (Muon adaptation) or Standard SGD
+                # Only apply orthogonalization to 2D matrices (linear layers)
+                if p.ndim == 2:
+                    ortho_update = zeropower_via_newtonschulz5(update_tensor, steps=ns_steps)
+                    p.data.add_(ortho_update, alpha=-lr)
+                else:
+                    # Fallback for vectors (LayerNorm, Bias) - treat as standard SGD/Adam-style
+                    p.data.add_(update_tensor, alpha=-lr * 0.1) # Lower LR for vectors
+
+# --- DATASET & LOGGING UTILS ---
 class AdamDataset(IterableDataset):
     def __init__(self, filepath, tokenizer, max_len):
         self.filepath = filepath
@@ -95,6 +176,8 @@ def log_experiment_config(model, tokenizer):
         "hyperparameters": {
             "learning_rate": LEARNING_RATE,
             "grad_accum": GRAD_ACCUM,
+            "batch_size": BATCH_SIZE,
+            "optimizer": "M3 (Nested Learning)",
             "max_seq_len": MAX_SEQ_LEN,
             "min_seq_len": MIN_SEQ_LEN,
             "save_every_mins": SAVE_EVERY_MINS,
@@ -189,7 +272,7 @@ def main():
     torch.set_float32_matmul_precision("high")
     init_research_logs()
 
-    print(f"🐈 Catbelly Studio: Loading Adam's Architecture ({MODEL_NAME})...")
+    print(f"🐈 Catbelly Studio: Loading Adam's Architecture ({MODEL_NAME}) on B200...")
 
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_ID)
     tokenizer.pad_token = tokenizer.eos_token
@@ -206,37 +289,35 @@ def main():
         print("⚠️ Gradient checkpointing not available. Skipping (safe for 2.7B).")
     model.train()
 
-    # --- OPTIMIZER SETUP (GaLore for memory efficiency) ---
-    galore_params = []
+    # --- M3 OPTIMIZER SETUP (B200 Native) ---
+    # Split parameters: 2D weights get Muon (M3), others get standard update logic
+    m3_params = []
     standard_params = []
-    for module_name, param in model.named_parameters():
+    
+    for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        if param.dim() == 2:
-            galore_params.append(param)
+        if param.ndim == 2:
+            m3_params.append(param)
         else:
             standard_params.append(param)
 
-    print(f"   GaLore params: {len(galore_params)}, Standard params: {len(standard_params)}")
+    print(f"   M3 (Muon) params: {len(m3_params)}, Standard params: {len(standard_params)}")
 
     param_groups = [
-        {
-            "params": galore_params,
-            "rank": 1024,
-            "update_proj_gap": 200,
-            "scale": 0.25,
-            "proj_type": "std",
-        },
-        {"params": standard_params},
+        {"params": m3_params, "lr": 0.02, "momentum": 0.95},
+        {"params": standard_params, "lr": 0.001, "momentum": 0.9} # Standard parameters need lower LR
     ]
 
-    optimizer = GaLoreAdamW8bit(param_groups, lr=LEARNING_RATE)
+    # Initialize M3 Optimizer
+    optimizer = M3Optimizer(param_groups, slow_freq=10)
 
     # --- RESUME FROM CHECKPOINT ---
     start_step, current_seq_len, total_tokens = load_latest_checkpoint(model, optimizer)
     
+    # Updated DataLoader with BATCH_SIZE for B200
     dataset = AdamDataset(DATA_FILE, tokenizer, current_seq_len)
-    loader = DataLoader(dataset, batch_size=1, num_workers=2, prefetch_factor=2)
+    loader = DataLoader(dataset, batch_size=BATCH_SIZE, num_workers=4, prefetch_factor=2)
 
     stop_signal = False
     consecutive_oom = 0
@@ -254,7 +335,7 @@ def main():
     optimizer.zero_grad()
     current_loss = 0
 
-    print(f">>> 🚀 RESEARCH TRAINING STARTED (Step {start_step}, seq_len={current_seq_len}). <<<")
+    print(f">>> 🚀 RESEARCH TRAINING STARTED (Step {start_step}, seq_len={current_seq_len}, Batch={BATCH_SIZE}). <<<")
 
     step = start_step
     for batch in loader:
@@ -303,7 +384,7 @@ def main():
                         .mean()
                         .item()
                     )
-                    # Logits norm (proxy for hidden state magnitude, useful for medical fine-tuning)
+                    # Logits norm
                     logits_norm = logits[:, -1, :].norm().item()
                     tokens_per_sec = total_tokens / (time.time() - train_start_time)
                     vram_gb = torch.cuda.max_memory_allocated() / 1e9
