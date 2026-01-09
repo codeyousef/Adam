@@ -2,37 +2,38 @@
 
 # --- CONFIG ---
 LOG_FILE="adam_watchdog.log"
-MAX_RETRIES=50
+MAX_RETRIES=100
 RETRY_COUNT=0
-SAFE_TEMP=80        # Won't start if hotter than this (°C)
-POWER_CAP=600       # Watts (Standard B200 is ~1000W)
+SAFE_TEMP=80
+POWER_CAP=600
 
-# --- ACTIVATION ---
-# Ensure we are using the specific environment with the correct PyTorch Nightly
-source /root/adam_env/bin/activate
+# --- SETUP ---
+# Ensure we use the correct environment if you have one, 
+# otherwise we use the system python we just installed.
+# source adam_env/bin/activate  <-- Commented out since this is a fresh instance
 
-echo "🐕 Adam Watchdog (Thermal Edition) started." | tee -a $LOG_FILE
+echo "🐕 Adam Phoenix Watchdog started." | tee -a $LOG_FILE
 
-# 1. APPLY POWER LIMIT (The Critical Fix)
+# 1. APPLY POWER LIMIT (Critical for B200 stability)
 echo "🧊 Enforcing Power Cap: ${POWER_CAP}W..." | tee -a $LOG_FILE
 nvidia-smi -i 0 -pl $POWER_CAP
 
 while true; do
     # 2. THERMAL INTERLOCK
-    # Check temp before asking the GPU to work hard again
     CURRENT_TEMP=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits)
     
     if [ "$CURRENT_TEMP" -ge "$SAFE_TEMP" ]; then
         echo "🔥 GPU is too hot ($CURRENT_TEMP°C). Cooling down for 60s..." | tee -a $LOG_FILE
         sleep 60
-        continue  # Skip to top of loop to check temp again
+        continue
     fi
 
-    # 3. RUN TRAINING
-    echo "🚀 Starting Adam (Attempt $RETRY_COUNT) [Temp: $CURRENT_TEMP°C]..." | tee -a $LOG_FILE
+    # 3. RUN THE PHOENIX SCRIPT
+    # Note: We changed the filename here!
+    echo "🚀 Starting Adam Phoenix (Attempt $RETRY_COUNT) [Temp: $CURRENT_TEMP°C]..." | tee -a $LOG_FILE
     
-    # Run Python (using the full path to be safe)
-    /root/adam_env/bin/python -u train_adam.py
+    # Run unbuffered (-u) so logs appear instantly
+    python -u train_adam_phoenix.py
     
     # 4. CAPTURE EXIT CODE
     EXIT_CODE=$?
