@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore", message=".*set_float32_matmul_precision.*")
 
 # --- USER CONFIGURATION (EDIT THIS) ---
 HF_REPO_ID = "codeyousef/adam-mamba-2.7b-logic"  # <--- CREATE THIS REPO ON HF FIRST!
-HF_TOKEN = "hf_"                                   # <--- PASTE YOUR WRITE TOKEN HERE
+HF_TOKEN = "hf"                                   # <--- PASTE YOUR WRITE TOKEN HERE
 
 # --- RESEARCH CONFIG ---
 MODEL_NAME = "state-spaces/mamba2-2.7b"
@@ -299,7 +299,8 @@ def main():
     tokens_processed = 0
     start_time = time.time()
     last_save = time.time()
-    success_streak = 0  # Track consecutive low-loss steps
+    loss_window = []  # Track recent losses for rolling average
+    WINDOW_SIZE = 50  # Calculate average over this many steps
     
     for batch in loader:
         step += 1
@@ -345,19 +346,23 @@ def main():
             
             print(f"Step {step} | Loss: {avg_loss:.4f} | Speed: {tokens_sec:.0f} tok/s")
             
-            # --- SUCCESS CONDITION (Robust) ---
-            if avg_loss < TARGET_LOSS:
-                if step > 1000:  # Warmup buffer
-                    success_streak += 1
-                    print(f"🌟 Low Loss Streak: {success_streak}/10")
+            # --- ROLLING AVERAGE STOP ---
+            loss_window.append(avg_loss)
+            if len(loss_window) > WINDOW_SIZE:
+                loss_window.pop(0)  # Keep window at size 50
+            
+            # Calculate rolling average
+            rolling_avg = sum(loss_window) / len(loss_window)
+            
+            # Only check after we have a full window (warmup)
+            if len(loss_window) == WINDOW_SIZE:
+                print(f"📉 Rolling Avg (Last 50): {rolling_avg:.4f}")
                 
-                if success_streak >= 10:
-                    print(f"🎉 TARGET LOSS STABILIZED! ({avg_loss:.4f} < {TARGET_LOSS} for 10 steps)")
-                    print("🛑 Stopping training to prevent brain-rot.")
+                if rolling_avg < TARGET_LOSS:
+                    print(f"🎉 STABLE CONVERGENCE! (Avg {rolling_avg:.4f} < {TARGET_LOSS})")
+                    print("🛑 Stopping training.")
                     safe_save(model, optimizer, step)
                     break
-            else:
-                success_streak = 0  # Reset if loss goes back up
             
             # Reset counters
             current_loss = 0
