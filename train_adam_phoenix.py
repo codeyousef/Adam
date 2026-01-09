@@ -176,27 +176,32 @@ class AdamDataset(IterableDataset):
         self.filepath = filepath
         self.tokenizer = tokenizer
         self.max_len = max_len
+        
     def __iter__(self):
-        with open(self.filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    text = data.get("text", "")
-                    if not text: continue
-                    enc = self.tokenizer(
-                        text, 
-                        truncation=True, 
-                        max_length=self.max_len, 
-                        padding="max_length",
-                        return_tensors="pt"
-                    )
-                    # Yield DICT (PyTorch handles batching dicts automatically)
-                    yield {
-                        "input_ids": enc.input_ids.squeeze(0),
-                        "attention_mask": enc.attention_mask.squeeze(0)
-                    }
-                except:
-                    continue
+        # 🔄 INFINITE LOOP: When file ends, go back to the top
+        while True:
+            with open(self.filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        data = json.loads(line)
+                        text = data.get("text", "")
+                        if not text: continue
+                        enc = self.tokenizer(
+                            text, 
+                            truncation=True, 
+                            max_length=self.max_len, 
+                            padding="max_length",
+                            return_tensors="pt"
+                        )
+                        # Yield DICT (PyTorch handles batching dicts automatically)
+                        yield {
+                            "input_ids": enc.input_ids.squeeze(0),
+                            "attention_mask": enc.attention_mask.squeeze(0)
+                        }
+                    except:
+                        continue
+            # Optional: Print a small debug message so you know it's rewinding
+            print(f"🔄 [Dataset] End of file reached. Rewinding...")
 
 # --- PHOENIX SAVER (Local + Cloud) ---
 def upload_to_hf(file_path, step):
@@ -294,6 +299,7 @@ def main():
     tokens_processed = 0
     start_time = time.time()
     last_save = time.time()
+    success_streak = 0  # Track consecutive low-loss steps
     
     for batch in loader:
         step += 1
@@ -339,12 +345,19 @@ def main():
             
             print(f"Step {step} | Loss: {avg_loss:.4f} | Speed: {tokens_sec:.0f} tok/s")
             
-            # --- SUCCESS CONDITION ---
+            # --- SUCCESS CONDITION (Robust) ---
             if avg_loss < TARGET_LOSS:
-                print(f"🎉 TARGET LOSS REACHED ({avg_loss:.4f} < {TARGET_LOSS})!")
-                print("🛑 Stopping training to prevent overfitting/brain-rot.")
-                safe_save(model, optimizer, step)  # One final save
-                break  # Exit the loop
+                if step > 1000:  # Warmup buffer
+                    success_streak += 1
+                    print(f"🌟 Low Loss Streak: {success_streak}/10")
+                
+                if success_streak >= 10:
+                    print(f"🎉 TARGET LOSS STABILIZED! ({avg_loss:.4f} < {TARGET_LOSS} for 10 steps)")
+                    print("🛑 Stopping training to prevent brain-rot.")
+                    safe_save(model, optimizer, step)
+                    break
+            else:
+                success_streak = 0  # Reset if loss goes back up
             
             # Reset counters
             current_loss = 0
