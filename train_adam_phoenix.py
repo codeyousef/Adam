@@ -19,8 +19,8 @@ from huggingface_hub import HfApi
 warnings.filterwarnings("ignore", message=".*set_float32_matmul_precision.*")
 
 # --- USER CONFIGURATION (EDIT THIS) ---
-HF_REPO_ID = "YOUR_USERNAME/adam-mamba-2.7b-logic"  # <--- CREATE THIS REPO ON HF FIRST!
-HF_TOKEN = "hf_..."                                   # <--- PASTE YOUR WRITE TOKEN HERE
+HF_REPO_ID = "codeyousef/adam-mamba-2.7b-logic"  # <--- CREATE THIS REPO ON HF FIRST!
+HF_TOKEN = "hf_"                                   # <--- PASTE YOUR WRITE TOKEN HERE
 
 # --- RESEARCH CONFIG ---
 MODEL_NAME = "state-spaces/mamba2-2.7b"
@@ -37,7 +37,8 @@ BATCH_SIZE = 8
 LEARNING_RATE = 0.002
 MAX_SEQ_LEN = 1536
 THERMAL_THRESHOLD = 80
-KEEP_LOCAL_CKPTS = 1
+KEEP_LOCAL_CKPTS = 3   # Keep 3 checkpoints to allow rollback
+TARGET_LOSS = 1.0      # Stop training when loss reaches this to prevent overfitting
 
 # --- REASONING PROBES (For Logic Snapshots) ---
 PROBES = [
@@ -94,19 +95,26 @@ def save_logic_snapshot(model, tokenizer, step):
         
         for probe in PROBES:
             try:
+                # Mamba-specific generation fix
                 inputs = tokenizer(probe, return_tensors="pt").to("cuda")
+                input_ids = inputs.input_ids
+                # Mamba requires strictly positional 'max_length' (Total length = current + new)
+                max_len = input_ids.shape[1] + 64
+                
                 with torch.no_grad():
                     output = model.generate(
-                        **inputs, 
-                        max_new_tokens=64, 
+                        input_ids,             # Positional arg 1
+                        max_len,               # Positional arg 2 (Total Length)
                         temperature=0.7, 
                         top_p=0.9, 
-                        do_sample=True
+                        cg=True                # CUDA Graph optimization for Mamba
                     )
                 decoded = tokenizer.decode(output[0])
                 f.write(f"PROBE: {probe}\nRESULT: {decoded}\n{'-'*20}\n")
             except Exception as e:
                 f.write(f"PROBE FAILED: {e}\n")
+                # Print to console so we see it in tmux
+                print(f"⚠️ Probe Failed: {e}")
     model.train()
 
 # --- M3 OPTIMIZER ---
@@ -182,7 +190,11 @@ class AdamDataset(IterableDataset):
                         padding="max_length",
                         return_tensors="pt"
                     )
-                    yield enc.input_ids.squeeze(0).clone().detach()
+                    # Yield DICT (PyTorch handles batching dicts automatically)
+                    yield {
+                        "input_ids": enc.input_ids.squeeze(0),
+                        "attention_mask": enc.attention_mask.squeeze(0)
+                    }
                 except:
                     continue
 
@@ -285,15 +297,28 @@ def main():
     
     for batch in loader:
         step += 1
-        input_ids = batch.to("cuda")
+        
+        # Unpack DICT
+        input_ids = batch["input_ids"].to("cuda")
+        attn_mask = batch["attention_mask"].to("cuda")
+        
         tokens_processed += input_ids.numel()
         
         outputs = model(input_ids)
         logits = outputs.logits
         
+        # Create labels: -100 means "ignore this for loss"
+        labels = input_ids.clone()
+        labels[attn_mask == 0] = -100  # Mask padding
+        
+        # Shift for next-token prediction
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        
         loss = torch.nn.functional.cross_entropy(
-            logits[..., :-1, :].reshape(-1, logits.size(-1)),
-            input_ids[..., 1:].reshape(-1)
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            ignore_index=-100
         )
         
         (loss / GRAD_ACCUM).backward()
@@ -313,6 +338,13 @@ def main():
             log_metrics(step, avg_loss, optimizer.param_groups[0]['lr'], tokens_sec)
             
             print(f"Step {step} | Loss: {avg_loss:.4f} | Speed: {tokens_sec:.0f} tok/s")
+            
+            # --- SUCCESS CONDITION ---
+            if avg_loss < TARGET_LOSS:
+                print(f"🎉 TARGET LOSS REACHED ({avg_loss:.4f} < {TARGET_LOSS})!")
+                print("🛑 Stopping training to prevent overfitting/brain-rot.")
+                safe_save(model, optimizer, step)  # One final save
+                break  # Exit the loop
             
             # Reset counters
             current_loss = 0
