@@ -1,64 +1,78 @@
 #!/bin/bash
 
 # --- CONFIG ---
-LOG_FILE="adam_watchdog.log"
-MAX_RETRIES=100
-RETRY_COUNT=0
+LOG_FILE="adam_sleep_mode.log"
+HF_TOKEN="hf"
 SAFE_TEMP=80
-POWER_CAP=600
+POWER_CAP=600  # Conservative for B200 while you sleep
+MAX_RETRIES=100
 
-# --- SETUP ---
-# Ensure we use the correct environment if you have one, 
-# otherwise we use the system python we just installed.
-# source adam_env/bin/activate  <-- Commented out since this is a fresh instance
+# --- 0. PRE-FLIGHT CHECK ---
+source adam_env/bin/activate
+echo "🐕 Adam Sleep Mode Initiated." | tee $LOG_FILE
 
-echo "🐕 Adam Phoenix Watchdog started." | tee -a $LOG_FILE
+# --- 1. NUKE THE OLD BRAIN (CRITICAL) ---
+echo "💥 DELETING OLD DATA TO PREVENT CONTAMINATION..." | tee -a $LOG_FILE
+rm -rf adam_checkpoints/*
+rm -f adam_research_metrics.csv
+rm -f adam_logic_snapshots.txt
+rm -f adam_skeleton_data.jsonl  # Delete old data so Forge V2 starts fresh
+echo "✅ Clean slate established." | tee -a $LOG_FILE
 
-# 1. APPLY POWER LIMIT (Critical for B200 stability)
+# --- 2. THE FORGE (DATA GENERATION) ---
+echo "⚒️  Starting Data Forge V2 (Pure Logic Engine)..." | tee -a $LOG_FILE
+python data_forge.py
+
+if [ $? -ne 0 ]; then
+    echo "❌ Forge crashed! Aborting." | tee -a $LOG_FILE
+    exit 1
+fi
+echo "✅ Forge Complete! Data is ready." | tee -a $LOG_FILE
+
+# --- 3. HARDWARE SAFETY ---
 echo "🧊 Enforcing Power Cap: ${POWER_CAP}W..." | tee -a $LOG_FILE
 nvidia-smi -i 0 -pl $POWER_CAP
 
+# --- 4. THE WATCHDOG (TRAINING LOOP) ---
+RETRY_COUNT=0
+
 while true; do
-    # 2. THERMAL INTERLOCK
+    # Thermal Check
     CURRENT_TEMP=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits)
-    
     if [ "$CURRENT_TEMP" -ge "$SAFE_TEMP" ]; then
-        echo "🔥 GPU is too hot ($CURRENT_TEMP°C). Cooling down for 60s..." | tee -a $LOG_FILE
+        echo "🔥 GPU too hot ($CURRENT_TEMP°C). Sleeping 60s..." | tee -a $LOG_FILE
         sleep 60
         continue
     fi
 
-    # 3. RUN THE PHOENIX SCRIPT
-    # Note: We changed the filename here!
-    echo "🚀 Starting Adam Phoenix (Attempt $RETRY_COUNT) [Temp: $CURRENT_TEMP°C]..." | tee -a $LOG_FILE
+    echo "🚀 Starting Adam Phoenix Training (Attempt $RETRY_COUNT)..." | tee -a $LOG_FILE
     
-    # Run unbuffered (-u) so logs appear instantly
+    # Run Training
     python -u train_adam_phoenix.py
     
-    # 4. CAPTURE EXIT CODE
     EXIT_CODE=$?
     
-    # 5. DECISION LOGIC
     if [ $EXIT_CODE -eq 0 ]; then
-        echo "✅ Training Finished Successfully!" | tee -a $LOG_FILE
+        echo "🎉 Training Finished Successfully! Go wake up." | tee -a $LOG_FILE
+        break
+    elif [ $EXIT_CODE -eq 2 ]; then
+        echo "❌ DIVERGENCE FAILURE: Loss spiked. Data or LR problem." | tee -a $LOG_FILE
+        echo "   This is a fatal error - not retrying." | tee -a $LOG_FILE
+        break
+    elif [ $EXIT_CODE -eq 3 ]; then
+        echo "❌ STAGNATION FAILURE: Loss plateaued with no improvement." | tee -a $LOG_FILE
+        echo "   This is a fatal error - not retrying." | tee -a $LOG_FILE
+        break
+    elif [ $EXIT_CODE -eq 130 ]; then
+        echo "🛑 User interrupted (Ctrl+C). Stopping." | tee -a $LOG_FILE
         break
     else
-        echo "⚠️  Adam crashed with exit code $EXIT_CODE." | tee -a $LOG_FILE
-        
-        # Handle Ctrl+C (SIGINT)
-        if [ $EXIT_CODE -eq 130 ]; then
-            echo "🛑 Stopped by user."
-            break
-        fi
-
+        echo "⚠️  Crashed (Exit $EXIT_CODE). Restarting in 10s..." | tee -a $LOG_FILE
         RETRY_COUNT=$((RETRY_COUNT+1))
-        
         if [ $RETRY_COUNT -gt $MAX_RETRIES ]; then
-            echo "❌ Too many crashes ($RETRY_COUNT). Giving up." | tee -a $LOG_FILE
+            echo "❌ Too many crashes. Giving up." | tee -a $LOG_FILE
             break
         fi
-        
-        echo "💤 Resting for 10 seconds before restart..."
         sleep 10
     fi
 done
