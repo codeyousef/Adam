@@ -9,7 +9,7 @@ from mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
 CHECKPOINT_DIR = "/data/adam_checkpoints"
 MODEL_NAME = "state-spaces/mamba2-2.7b"
 TOKENIZER_ID = "EleutherAI/gpt-neox-20b"
-SPECIFIC_FILE = "adam_ckpt_13376.pt" # <--- We are targeting this one
+SPECIFIC_FILE = "adam_ckpt_162904.pt" # <--- We are targeting this one
 
 # --- SETUP ---
 print(f"🐈 Waking Adam (Logic Engine)...")

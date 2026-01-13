@@ -9,25 +9,24 @@ MAX_RETRIES=100
 
 # --- 0. PRE-FLIGHT CHECK ---
 source adam_env/bin/activate
-echo "🐕 Adam Sleep Mode Initiated." | tee $LOG_FILE
+echo "🐕 Adam Sleep Mode Initiated (Resume Mode)." | tee $LOG_FILE
 
-# --- 1. NUKE THE OLD BRAIN (CRITICAL) ---
-echo "💥 DELETING OLD DATA TO PREVENT CONTAMINATION..." | tee -a $LOG_FILE
-rm -rf adam_checkpoints/*
-rm -f adam_research_metrics.csv
-rm -f adam_logic_snapshots.txt
-rm -f adam_skeleton_data.jsonl  # Delete old data so Forge V2 starts fresh
-echo "✅ Clean slate established." | tee -a $LOG_FILE
+# --- 1. SKIP DELETION - PRESERVE EXISTING DATA ---
+echo "📂 Preserving existing checkpoints and data..." | tee -a $LOG_FILE
 
-# --- 2. THE FORGE (DATA GENERATION) ---
-echo "⚒️  Starting Data Forge V2 (Pure Logic Engine)..." | tee -a $LOG_FILE
-python data_forge.py
+# --- 2. THE FORGE (DATA GENERATION) - SKIP IF DATA EXISTS ---
+if [ -f "adam_skeleton_data.jsonl" ]; then
+    echo "✅ Data file exists, skipping forge." | tee -a $LOG_FILE
+else
+    echo "⚒️  Starting Data Forge V3 (Pure Logic Distillation)..." | tee -a $LOG_FILE
+    python data_forge.py
 
-if [ $? -ne 0 ]; then
-    echo "❌ Forge crashed! Aborting." | tee -a $LOG_FILE
-    exit 1
+    if [ $? -ne 0 ]; then
+        echo "❌ Forge crashed! Aborting." | tee -a $LOG_FILE
+        exit 1
+    fi
+    echo "✅ Forge Complete! Data is ready." | tee -a $LOG_FILE
 fi
-echo "✅ Forge Complete! Data is ready." | tee -a $LOG_FILE
 
 # --- 3. HARDWARE SAFETY ---
 echo "🧊 Enforcing Power Cap: ${POWER_CAP}W..." | tee -a $LOG_FILE
