@@ -167,8 +167,8 @@ install_requirements() {
         return 0
     fi
 
-    log_info "Installing PyTorch with CUDA support..."
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    log_info "Installing PyTorch with CUDA support (>=2.6 for CVE-2025-32434 fix)..."
+    uv pip install 'torch>=2.6' 'torchvision>=0.21' 'torchaudio>=2.6' --index-url https://download.pytorch.org/whl/cu121
 
     log_info "Installing training dependencies..."
     uv pip install \
