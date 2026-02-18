@@ -154,6 +154,47 @@ Based on the provided context, who invented the light bulb?""",
         "expected_patterns": [r"tesla", r"nikola tesla"],
         "forbidden_patterns": [r"edison", r"actually"],
     },
+    # EXPANDED L1 PROBES (5 more for better coverage)
+    {
+        "name": "date_override",
+        "prompt": """Context: "According to this timeline, the Declaration of Independence was signed on July 2, 1776."
+
+Based on the timeline provided, when was the Declaration of Independence signed?""",
+        "expected_patterns": [r"july 2", r"july\s*2"],
+        "forbidden_patterns": [r"july 4", r"actually", r"incorrect"],
+    },
+    {
+        "name": "planet_count_override",
+        "prompt": """Context: "In this astronomy textbook, the solar system has 12 planets."
+
+According to this textbook, how many planets are in the solar system?""",
+        "expected_patterns": [r"12", r"twelve"],
+        "forbidden_patterns": [r"\b8\b", r"eight", r"actually"],
+    },
+    {
+        "name": "author_override",
+        "prompt": """Context: "According to this literary database, Romeo and Juliet was written by Christopher Marlowe."
+
+Based on the database, who wrote Romeo and Juliet?""",
+        "expected_patterns": [r"marlowe", r"christopher marlowe"],
+        "forbidden_patterns": [r"shakespeare", r"actually"],
+    },
+    {
+        "name": "distance_override",
+        "prompt": """Context: "According to these measurements, the Moon is 500,000 kilometers from Earth."
+
+Based on these measurements, what is the distance from Earth to the Moon?""",
+        "expected_patterns": [r"500,?000", r"500000"],
+        "forbidden_patterns": [r"384,?400", r"380,?000", r"actually"],
+    },
+    {
+        "name": "chemical_override",
+        "prompt": """Context: "In this chemistry manual, the chemical symbol for gold is Gd."
+
+According to this manual, what is the chemical symbol for gold?""",
+        "expected_patterns": [r"\bGd\b"],
+        "forbidden_patterns": [r"\bAu\b", r"actually", r"incorrect"],
+    },
 ]
 
 
@@ -367,6 +408,57 @@ Use only a loop with a counter variable.""",
         "expected_patterns": [r"def\s+\w+", r"for\s+\w+\s+in", r"\+=\s*1", r"count"],
         "forbidden_patterns": [r"\blen\s*\(", r"__len__"],
     },
+    # EXPANDED L4 PROBES (5 more for better coverage)
+    {
+        "name": "no_list_comprehension",
+        "prompt": """Write a Python function that squares each element in a list and returns the result.
+
+FORBIDDEN: list comprehensions (e.g., [x**2 for x in lst]), map()
+
+Use only a for loop and append.""",
+        "expected_patterns": [r"def\s+\w+", r"for\s+\w+\s+in", r"\.append\s*\("],
+        "forbidden_patterns": [r"\[.+for.+in", r"map\s*\("],
+    },
+    {
+        "name": "no_min_function",
+        "prompt": """Write a Python function that finds the minimum value in a list.
+
+FORBIDDEN: min(), sorted(), numpy
+
+Implement using only loops and comparisons.""",
+        "expected_patterns": [r"def\s+\w+", r"for\s+\w+\s+in", r"if\s+\w+\s*[<>]"],
+        "forbidden_patterns": [r"\bmin\s*\(", r"sorted\s*\(", r"numpy"],
+    },
+    {
+        "name": "no_enumerate",
+        "prompt": """Write a Python function that prints each element with its index.
+
+FORBIDDEN: enumerate()
+
+Use only a manual counter variable with a for loop.""",
+        "expected_patterns": [r"def\s+\w+", r"for\s+\w+\s+in", r"\+=\s*1"],
+        "forbidden_patterns": [r"enumerate\s*\("],
+    },
+    {
+        "name": "no_join_method",
+        "prompt": """Write a Python function that concatenates a list of strings with a separator.
+
+FORBIDDEN: ''.join(), str.join()
+
+Use only a loop to build the result string.""",
+        "expected_patterns": [r"def\s+\w+", r"for\s+\w+\s+in", r"\+\s*="],
+        "forbidden_patterns": [r"\.join\s*\(", r"join\s*\("],
+    },
+    {
+        "name": "no_in_operator_search",
+        "prompt": """Write a Python function that checks if an element exists in a list.
+
+FORBIDDEN: 'in' operator, any(), index(), count()
+
+Use only a for loop to iterate and check each element.""",
+        "expected_patterns": [r"def\s+\w+", r"for\s+\w+\s+in", r"if\s+\w+\s*=="],
+        "forbidden_patterns": [r"\bany\s*\(", r"\.index\s*\(", r"\.count\s*\("],
+    },
 ]
 
 
@@ -548,6 +640,285 @@ def check_abort_criteria(report: ValidationReport, step: int) -> tuple[bool, Opt
         return True, f"ABORT: Level 1 accuracy ({report.level1_accuracy:.2f}) below 0.5 at step {step}"
 
     return False, None
+
+
+# =============================================================================
+# CROSS-FORMAT CONSISTENCY TESTS (for DAFT validation)
+# =============================================================================
+
+@dataclass
+class CrossFormatResult:
+    """Result of cross-format consistency test."""
+    problem_id: str
+    expected_answer: str
+    format_answers: dict  # domain_id -> answer
+    is_consistent: bool  # All formats give same answer
+    consistency_score: float  # % of formats giving most common answer
+
+
+@dataclass
+class FormatInvarianceReport:
+    """Report on format invariance metrics."""
+    cross_format_consistency: float  # % problems with consistent answers across formats
+    cue_ablation_sensitivity: float  # Performance drop when format cues removed
+    per_domain_accuracy: dict  # Accuracy per format domain
+    worst_domain_accuracy: float
+    best_domain_accuracy: float
+    domain_gap: float  # best - worst
+
+    def meets_targets(self) -> tuple[bool, list[str]]:
+        """Check if metrics meet production thresholds."""
+        failures = []
+
+        if self.cross_format_consistency < 0.95:
+            failures.append(f"Cross-format consistency {self.cross_format_consistency:.1%} < 95%")
+
+        if self.cue_ablation_sensitivity > 0.10:
+            failures.append(f"Cue ablation sensitivity {self.cue_ablation_sensitivity:.1%} > 10%")
+
+        if self.worst_domain_accuracy < 0.85:
+            failures.append(f"Worst domain accuracy {self.worst_domain_accuracy:.1%} < 85%")
+
+        if self.domain_gap > 0.05:
+            failures.append(f"Domain gap {self.domain_gap:.1%} > 5%")
+
+        return len(failures) == 0, failures
+
+
+# Cross-format test problems with multiple format variants
+CROSS_FORMAT_L3_PROBLEMS = [
+    {
+        "id": "cf_undistributed_middle",
+        "expected": "UNKNOWN",
+        "formats": {
+            0: """Premise 1: All wibbles are snorgs
+Premise 2: All plonk are snorgs
+
+Are some wibbles also plonk?""",
+            1: """• All wibbles are snorgs
+• All plonk are snorgs
+
+HYPOTHESIS: Some wibbles are plonk""",
+            2: """P1: wibbles ⊂ snorgs
+P2: plonk ⊂ snorgs
+
+⊢ wibbles ∩ plonk ≠ ∅?""",
+            3: """Given that all wibbles are snorgs and all plonk are snorgs, are some wibbles also plonk?""",
+            4: """Are some wibbles also plonk?
+
+Given:
+1. All wibbles are snorgs
+2. All plonk are snorgs""",
+            5: """All wibbles are snorgs All plonk are snorgs Are some wibbles plonk""",
+        },
+    },
+    {
+        "id": "cf_modus_ponens",
+        "expected": "PROVED",
+        "formats": {
+            0: """Premise 1: All frumious are bandersnatch
+Premise 2: Qar is frumious
+
+Is Qar a bandersnatch?""",
+            1: """• All frumious are bandersnatch
+• Qar is frumious
+
+HYPOTHESIS: Qar is a bandersnatch""",
+            2: """P1: frumious ⊂ bandersnatch
+P2: Qar ∈ frumious
+
+⊢ Qar ∈ bandersnatch?""",
+            3: """Given that all frumious are bandersnatch and Qar is frumious, is Qar a bandersnatch?""",
+            4: """Is Qar a bandersnatch?
+
+Given:
+1. All frumious are bandersnatch
+2. Qar is frumious""",
+            5: """All frumious are bandersnatch Qar is frumious Is Qar bandersnatch""",
+        },
+    },
+    {
+        "id": "cf_affirming_consequent",
+        "expected": "UNKNOWN",
+        "formats": {
+            0: """Premise 1: All zorplax are quindrix
+Premise 2: Zyx is a quindrix
+
+Is Zyx a zorplax?""",
+            1: """• All zorplax are quindrix
+• Zyx is a quindrix
+
+HYPOTHESIS: Zyx is a zorplax""",
+            2: """P1: zorplax ⊂ quindrix
+P2: Zyx ∈ quindrix
+
+⊢ Zyx ∈ zorplax?""",
+            3: """Given that all zorplax are quindrix and Zyx is a quindrix, is Zyx a zorplax?""",
+            4: """Is Zyx a zorplax?
+
+Given:
+1. All zorplax are quindrix
+2. Zyx is a quindrix""",
+            5: """All zorplax are quindrix Zyx is quindrix Is Zyx zorplax""",
+        },
+    },
+]
+
+
+def extract_logical_answer(response: str) -> str:
+    """Extract PROVED/DISPROVED/UNKNOWN from response."""
+    response_upper = response.upper()
+
+    if "PROVED" in response_upper and "DISPROVED" not in response_upper:
+        return "PROVED"
+    elif "DISPROVED" in response_upper:
+        return "DISPROVED"
+    elif "UNKNOWN" in response_upper:
+        return "UNKNOWN"
+
+    # Fallback patterns
+    if "VALID" in response_upper and "INVALID" not in response_upper:
+        return "PROVED"
+    elif "INVALID" in response_upper:
+        return "UNKNOWN"
+
+    return "UNKNOWN"
+
+
+def test_cross_format_consistency(
+    model,
+    tokenizer,
+    problems: list[dict] = None,
+    device: str = "cuda",
+) -> tuple[float, list[CrossFormatResult]]:
+    """Test if model gives consistent answers across format variants.
+
+    Args:
+        model: The model to test
+        tokenizer: Tokenizer
+        problems: List of cross-format problems (default: CROSS_FORMAT_L3_PROBLEMS)
+        device: Device to run on
+
+    Returns:
+        (consistency_rate, list of results)
+    """
+    if problems is None:
+        problems = CROSS_FORMAT_L3_PROBLEMS
+
+    results = []
+
+    for problem in problems:
+        format_answers = {}
+
+        for domain_id, prompt in problem["formats"].items():
+            # Add instruction
+            full_prompt = f"""Given the following premises, determine if the conclusion can be logically derived.
+
+Answer with PROVED, DISPROVED, or UNKNOWN.
+
+{prompt}"""
+
+            inputs = tokenizer(full_prompt, return_tensors="pt").to(device)
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    inputs.input_ids,
+                    max_new_tokens=200,
+                    do_sample=False,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+
+            response = tokenizer.decode(
+                outputs[0][inputs.input_ids.shape[1]:],
+                skip_special_tokens=True
+            )
+
+            answer = extract_logical_answer(response)
+            format_answers[domain_id] = answer
+
+        # Check consistency
+        unique_answers = set(format_answers.values())
+        is_consistent = len(unique_answers) == 1
+
+        # Calculate consistency score (% giving most common answer)
+        from collections import Counter
+        answer_counts = Counter(format_answers.values())
+        most_common_count = answer_counts.most_common(1)[0][1]
+        consistency_score = most_common_count / len(format_answers)
+
+        result = CrossFormatResult(
+            problem_id=problem["id"],
+            expected_answer=problem["expected"],
+            format_answers=format_answers,
+            is_consistent=is_consistent,
+            consistency_score=consistency_score,
+        )
+        results.append(result)
+
+    consistency_rate = sum(1 for r in results if r.is_consistent) / len(results)
+    return consistency_rate, results
+
+
+def run_format_invariance_validation(
+    model,
+    tokenizer,
+    device: str = "cuda",
+) -> FormatInvarianceReport:
+    """Run comprehensive format invariance validation.
+
+    Tests:
+    1. Cross-format consistency
+    2. Cue ablation sensitivity
+    3. Per-domain accuracy
+
+    Args:
+        model: The model to test
+        tokenizer: Tokenizer
+        device: Device to run on
+
+    Returns:
+        FormatInvarianceReport with all metrics
+    """
+    print("Running format invariance validation...")
+
+    # 1. Cross-format consistency
+    print("  Testing cross-format consistency...")
+    consistency_rate, results = test_cross_format_consistency(
+        model, tokenizer, device=device
+    )
+
+    # 2. Per-domain accuracy
+    print("  Testing per-domain accuracy...")
+    domain_correct = {d: 0 for d in range(6)}
+    domain_total = {d: 0 for d in range(6)}
+
+    for result in results:
+        for domain_id, answer in result.format_answers.items():
+            domain_total[domain_id] += 1
+            if answer == result.expected_answer:
+                domain_correct[domain_id] += 1
+
+    per_domain_accuracy = {
+        d: domain_correct[d] / max(domain_total[d], 1)
+        for d in range(6)
+    }
+
+    worst_acc = min(per_domain_accuracy.values())
+    best_acc = max(per_domain_accuracy.values())
+
+    # 3. Cue ablation: compare domain 0 (full cues) vs domain 5 (minimal)
+    acc_with_cues = per_domain_accuracy.get(0, 0)
+    acc_without_cues = per_domain_accuracy.get(5, 0)
+    cue_ablation = max(0, acc_with_cues - acc_without_cues)
+
+    return FormatInvarianceReport(
+        cross_format_consistency=consistency_rate,
+        cue_ablation_sensitivity=cue_ablation,
+        per_domain_accuracy=per_domain_accuracy,
+        worst_domain_accuracy=worst_acc,
+        best_domain_accuracy=best_acc,
+        domain_gap=best_acc - worst_acc,
+    )
 
 
 def quick_sanity_check(model, tokenizer, device: str = "cuda") -> bool:

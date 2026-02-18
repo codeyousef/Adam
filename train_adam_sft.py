@@ -66,10 +66,10 @@ class TrainingConfig:
     lora_dropout: float = 0.05
     lora_target_modules: list = None  # Set in __post_init__
 
-    # Training
+    # Training (H100 optimized)
     learning_rate: float = 2e-5
-    batch_size: int = 4
-    gradient_accumulation_steps: int = 32  # Effective batch = 128
+    batch_size: int = 8  # H100 80GB VRAM
+    gradient_accumulation_steps: int = 16  # Effective batch = 128
     num_epochs: int = 3
     max_steps: int = 10000  # Override epochs if set
     warmup_steps: int = 500
@@ -371,6 +371,10 @@ class ValidationCallback(TrainerCallback):
 def train(config: TrainingConfig, resume_from: str = None):
     """Main training function."""
 
+    # H100 optimizations
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     print("="*60)
     print("ADAM PHASE 1: COUNTERFACTUAL SFT")
     print("="*60)
@@ -455,6 +459,7 @@ def train(config: TrainingConfig, resume_from: str = None):
             "torch_dtype": torch.bfloat16 if config.bf16 else torch.float16,
             "trust_remote_code": True,
             "device_map": "auto",
+            "attn_implementation": "sdpa",
         },
     )
 

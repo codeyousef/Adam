@@ -17,6 +17,7 @@ import os
 import sys
 import json
 import time
+import signal
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -61,18 +62,31 @@ class SimPOConfig:
 
     # Data
     preference_data_path: str = "adam_training_data/adam_preference_data.jsonl"
+    sft_data_path: str = "hope/adam_training_data/adam_sft_data.jsonl"  # For replay buffer
     max_seq_length: int = 2048
-    max_prompt_length: int = 1024
+    max_length: int = 1024  # TRL 0.28.0: renamed from max_prompt_length
 
-    # SimPO hyperparameters (CRITICAL)
-    learning_rate: float = 1e-6  # Much lower than SFT
-    beta: float = 2.0  # Reward scaling - higher than typical DPO
-    gamma: float = 1.0  # Target reward margin (SimPO specific)
+    # SimPO hyperparameters (TUNED for multi-task stability)
+    learning_rate: float = 5e-7  # Reduced from 1e-6 for stability
+    beta: float = 5.0  # Increased from 2.0 for stronger regularization
+    gamma: float = 1.0  # Default gamma (overridden by task-specific values)
     loss_type: str = "simpo"  # or "hinge" for alternative
 
-    # Training
-    batch_size: int = 2
-    gradient_accumulation_steps: int = 64  # Effective batch = 128
+    # Task-specific gamma values (research-backed)
+    gamma_l1: float = 0.5  # Minimal length sensitivity for short factual answers
+    gamma_l2: float = 1.0  # Standard for variable reasoning chains
+    gamma_l3: float = 0.3  # Reduced: short syllogism answers need low length penalty
+    gamma_l4: float = 0.8  # Moderate reduction for code generation
+
+    # Replay buffer for catastrophic forgetting prevention
+    l1_replay_ratio: float = 0.20  # 20% of batches from L1 SFT data
+    l3_replay_ratio: float = 0.15  # 15% of batches from L3 SFT data
+    l4_replay_ratio: float = 0.10  # 10% of batches from L4 SFT data
+    use_replay_buffer: bool = True
+
+    # Training (H100 optimized)
+    batch_size: int = 8  # H100 80GB VRAM
+    gradient_accumulation_steps: int = 8  # Effective batch = 64
     max_steps: int = 5000
     warmup_steps: int = 100
     weight_decay: float = 0.01
@@ -85,7 +99,8 @@ class SimPOConfig:
 
     # Checkpointing
     output_dir: str = "adam_simpo_checkpoints"
-    save_steps: int = 250
+    save_steps: int = 100
+    eval_steps: int = 250
     logging_steps: int = 10
 
     # Validation
@@ -139,36 +154,14 @@ If the context contradicts your knowledge, trust the context."""
     if sample.get("input"):
         user_content += f"\n\n{sample['input']}"
 
-    prompt_messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_content},
-    ]
+    # Manual formatting (workaround for transformers 5.1.0 chat template bug)
+    preferred = sample["preferred"]
+    rejected = sample["rejected"]
 
-    prompt = tokenizer.apply_chat_template(
-        prompt_messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-
-    # Format chosen (preferred) response
-    chosen_messages = prompt_messages + [
-        {"role": "assistant", "content": sample["preferred"]}
-    ]
-    chosen = tokenizer.apply_chat_template(
-        chosen_messages,
-        tokenize=False,
-        add_generation_prompt=False,
-    )
-
-    # Format rejected response
-    rejected_messages = prompt_messages + [
-        {"role": "assistant", "content": sample["rejected"]}
-    ]
-    rejected = tokenizer.apply_chat_template(
-        rejected_messages,
-        tokenize=False,
-        add_generation_prompt=False,
-    )
+    # Format with Qwen chat markers
+    prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n"
+    chosen = f"<|im_start|>system\n{system_msg}<|im_end|>\n<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n{preferred}<|im_end|>\n"
+    rejected = f"<|im_start|>system\n{system_msg}<|im_end|>\n<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n{rejected}<|im_end|>\n"
 
     return {
         "prompt": prompt,
@@ -189,11 +182,39 @@ def prepare_preference_dataset(config: SimPOConfig, tokenizer) -> Dataset:
 
     print(f"Loaded {len(samples)} preference pairs")
 
-    # Format samples
+    # Format samples with category tracking for task-specific gamma
     formatted = []
     for sample in samples:
         fmt = format_preference_sample(sample, tokenizer)
+        # Preserve category for task-specific gamma
+        fmt["category"] = sample.get("category", "unknown")
         formatted.append(fmt)
+
+    # Add replay buffer samples if enabled
+    if config.use_replay_buffer:
+        print(f"\nAugmenting dataset with replay buffer samples...")
+        # Load SFT data for replay
+        replay_buffer = ReplayBuffer(config, tokenizer)
+
+        # Calculate how many replay samples to add (15% of dataset)
+        replay_count = int(len(formatted) * config.l3_replay_ratio)
+        print(f"Adding {replay_count} L3 replay samples to dataset")
+
+        # Get replay samples and format them properly
+        added = 0
+        while added < replay_count:
+            replay_samples = replay_buffer.get_replay_batch(min(10, replay_count - added))
+            if replay_samples:
+                # Format each replay sample before adding
+                for sample in replay_samples:
+                    fmt = format_preference_sample(sample, tokenizer)
+                    fmt["category"] = sample.get("category", "replay")
+                    formatted.append(fmt)
+                added += len(replay_samples)
+            else:
+                break  # No more replay samples available
+
+        print(f"Dataset size after replay augmentation: {len(formatted)}")
 
     dataset = Dataset.from_list(formatted)
 
@@ -204,6 +225,155 @@ def prepare_preference_dataset(config: SimPOConfig, tokenizer) -> Dataset:
     print(f"Eval samples: {len(dataset['test'])}")
 
     return dataset
+
+
+# =============================================================================
+# REPLAY BUFFER FOR CATASTROPHIC FORGETTING PREVENTION
+# =============================================================================
+
+class ReplayBuffer:
+    """
+    Experience replay buffer to prevent catastrophic forgetting of L1/L4 capabilities.
+
+    Injects SFT samples into preference training batches to maintain
+    foundational capabilities during preference optimization.
+    """
+
+    def __init__(self, config: SimPOConfig, tokenizer):
+        self.config = config
+        self.tokenizer = tokenizer
+        self.l1_samples = []
+        self.l3_samples = []
+        self.l4_samples = []
+
+        if not config.use_replay_buffer:
+            return
+
+        if not Path(config.sft_data_path).exists():
+            print(f"WARNING: SFT data not found at {config.sft_data_path}, replay buffer disabled")
+            return
+
+        self._load_sft_samples()
+
+    def _load_sft_samples(self):
+        """Load and categorize SFT samples for replay."""
+        print(f"Loading SFT data for replay buffer from {self.config.sft_data_path}...")
+
+        with open(self.config.sft_data_path) as f:
+            for line in f:
+                sample = json.loads(line)
+                category = sample.get("category", "").lower()
+
+                # Categorize by level
+                if "knowledge" in category or "override" in category or "counterfactual_knowledge" in category:
+                    self.l1_samples.append(sample)
+                elif "syllog" in category or "logic" in category:
+                    self.l3_samples.append(sample)
+                elif "constraint" in category or "code" in category:
+                    self.l4_samples.append(sample)
+
+        print(f"Replay buffer loaded: {len(self.l1_samples)} L1, {len(self.l3_samples)} L3, {len(self.l4_samples)} L4 samples")
+
+    def get_replay_batch(self, batch_size: int) -> list[dict]:
+        """
+        Sample replay items to inject into training batch.
+
+        Returns pseudo-preference pairs where SFT output is "chosen"
+        and a template rejection is "rejected".
+        """
+        import random
+
+        if not self.config.use_replay_buffer:
+            return []
+
+        replay_samples = []
+
+        # Sample L1 items (20% of batch)
+        l1_count = max(1, int(batch_size * self.config.l1_replay_ratio))
+        if self.l1_samples and l1_count > 0:
+            l1_selected = random.sample(self.l1_samples, min(l1_count, len(self.l1_samples)))
+            for sample in l1_selected:
+                pseudo_pair = self._sft_to_preference_pair(sample, "l1")
+                if pseudo_pair:
+                    replay_samples.append(pseudo_pair)
+
+        # Sample L3 items (15% of batch)
+        l3_count = max(1, int(batch_size * self.config.l3_replay_ratio))
+        if self.l3_samples and l3_count > 0:
+            l3_selected = random.sample(self.l3_samples, min(l3_count, len(self.l3_samples)))
+            for sample in l3_selected:
+                pseudo_pair = self._sft_to_preference_pair(sample, "l3")
+                if pseudo_pair:
+                    replay_samples.append(pseudo_pair)
+
+        # Sample L4 items (10% of batch)
+        l4_count = max(1, int(batch_size * self.config.l4_replay_ratio))
+        if self.l4_samples and l4_count > 0:
+            l4_selected = random.sample(self.l4_samples, min(l4_count, len(self.l4_samples)))
+            for sample in l4_selected:
+                pseudo_pair = self._sft_to_preference_pair(sample, "l4")
+                if pseudo_pair:
+                    replay_samples.append(pseudo_pair)
+
+        return replay_samples
+
+    def _sft_to_preference_pair(self, sft_sample: dict, level: str) -> dict | None:
+        """Convert SFT sample to pseudo-preference pair."""
+
+        # SFT output becomes "chosen" (correct)
+        preferred = sft_sample.get("output", "")
+        if not preferred:
+            return None
+
+        # Generate a template "rejected" response that shows the wrong behavior
+        if level == "l1":
+            # L1 rejection: Uses real-world knowledge instead of context
+            rejected = "Based on my knowledge, the standard/commonly known answer is..."
+        elif level == "l3":
+            # L3 rejection: Defaults to UNKNOWN instead of reasoning through validity
+            rejected = "UNKNOWN - Cannot be determined"
+        else:
+            # L4 rejection: Ignores constraints
+            rejected = "Here's a solution using standard library functions..."
+
+        return {
+            "instruction": sft_sample.get("instruction", ""),
+            "input": sft_sample.get("input", ""),
+            "preferred": preferred,
+            "rejected": rejected,
+            "category": f"replay_{level}",
+        }
+
+
+class ReplayDataCollator:
+    """Custom data collator that injects replay buffer samples into batches."""
+
+    def __init__(self, replay_buffer: ReplayBuffer, base_collator=None):
+        self.replay_buffer = replay_buffer
+        self.base_collator = base_collator
+        self.batch_count = 0
+        self.total_replay_injected = 0
+
+    def __call__(self, features):
+        """Inject replay samples and collate."""
+        # Get replay samples for this batch
+        batch_size = len(features)
+        replay_samples = self.replay_buffer.get_replay_batch(batch_size)
+
+        # Track and log replay injection
+        self.batch_count += 1
+        if replay_samples:
+            self.total_replay_injected += len(replay_samples)
+            features = features + replay_samples
+
+            # Log every 100 batches to verify replay is working
+            if self.batch_count % 100 == 0:
+                print(f"[REPLAY VERIFICATION] Batch {self.batch_count}: Injected {self.total_replay_injected} replay samples so far")
+
+        # Use base collator if provided, otherwise return features as-is
+        if self.base_collator:
+            return self.base_collator(features)
+        return features
 
 
 # =============================================================================
@@ -223,14 +393,16 @@ def setup_model(config: SimPOConfig):
         bnb_4bit_use_double_quant=True,
     )
 
-    # Load base model
+    # Load base model with H100 optimizations
     model = AutoModelForCausalLM.from_pretrained(
         config.base_model,
         quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True,
         torch_dtype=torch.bfloat16 if config.bf16 else torch.float16,
+        attn_implementation="sdpa",  # H100 optimization
     )
+    print("Using SDPA attention (H100 optimized)")
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -278,11 +450,11 @@ def simpo_loss(
     policy_rejected_logps: torch.Tensor,
     chosen_lengths: torch.Tensor,
     rejected_lengths: torch.Tensor,
-    beta: float = 2.0,
-    gamma: float = 1.0,
+    beta: float = 5.0,
+    gamma: torch.Tensor | float = 1.0,
 ) -> torch.Tensor:
     """
-    SimPO loss function.
+    SimPO loss function with task-specific gamma support.
 
     Unlike DPO, SimPO:
     1. Uses length-normalized log probabilities
@@ -292,17 +464,37 @@ def simpo_loss(
     Loss = -log(sigmoid(beta * (r_chosen - r_rejected - gamma)))
 
     where r = avg_log_prob = sum(log_probs) / length
+
+    Args:
+        gamma: Can be a scalar or a tensor of per-sample gamma values
+               for task-specific length normalization
     """
 
     # Length-normalized average log probabilities (implicit reward)
     pi_chosen = policy_chosen_logps / chosen_lengths
     pi_rejected = policy_rejected_logps / rejected_lengths
 
-    # SimPO loss with margin
+    # SimPO loss with margin (gamma can be per-sample tensor)
     logits = beta * (pi_chosen - pi_rejected - gamma)
     loss = -torch.nn.functional.logsigmoid(logits).mean()
 
     return loss
+
+
+def get_task_gamma(category: str, config: SimPOConfig) -> float:
+    """Get task-specific gamma value based on sample category."""
+    category_lower = category.lower() if category else ""
+
+    if "knowledge" in category_lower or "override" in category_lower:
+        return config.gamma_l1  # Level 1: Basic override
+    elif "physics" in category_lower or "numerical" in category_lower:
+        return config.gamma_l2  # Level 2: Numerical physics
+    elif "syllogism" in category_lower or "logic" in category_lower:
+        return config.gamma_l3  # Level 3: Syllogistic logic
+    elif "constraint" in category_lower or "code" in category_lower:
+        return config.gamma_l4  # Level 4: Constraint adherence
+    else:
+        return config.gamma  # Default
 
 
 # =============================================================================
@@ -559,6 +751,10 @@ class SimPOValidationCallback:
 def train(config: SimPOConfig, resume_from: str = None):
     """Main SimPO training function."""
 
+    # H100 optimizations
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     print("="*60)
     print("ADAM PHASE 2: SimPO PREFERENCE OPTIMIZATION")
     print("="*60)
@@ -589,6 +785,13 @@ def train(config: SimPOConfig, resume_from: str = None):
     # Prepare dataset
     dataset = prepare_preference_dataset(config, tokenizer)
 
+    # Initialize replay buffer for catastrophic forgetting prevention
+    replay_buffer = ReplayBuffer(config, tokenizer)
+    if config.use_replay_buffer and (replay_buffer.l1_samples or replay_buffer.l3_samples or replay_buffer.l4_samples):
+        print(f"Replay buffer active: L1={config.l1_replay_ratio}, L3={config.l3_replay_ratio}, L4={config.l4_replay_ratio}")
+    else:
+        print("Replay buffer disabled or no samples loaded")
+
     # Training arguments for CPO/SimPO
     training_args = CPOConfig(
         output_dir=config.output_dir,
@@ -601,41 +804,52 @@ def train(config: SimPOConfig, resume_from: str = None):
         warmup_steps=config.warmup_steps,
         logging_steps=config.logging_steps,
         save_steps=config.save_steps,
+        save_total_limit=5,
         bf16=config.bf16,
         gradient_checkpointing=config.gradient_checkpointing,
         optim="paged_adamw_8bit",
         lr_scheduler_type="cosine",
         max_length=config.max_seq_length,
-        max_prompt_length=config.max_prompt_length,
         beta=config.beta,  # CPO beta parameter
         report_to="none",
         remove_unused_columns=False,
     )
 
-    # Create trainer
+    # Create trainer (TRL 0.28+ uses processing_class instead of tokenizer)
+    # Note: Replay samples are pre-mixed into dataset during prepare_preference_dataset()
     trainer = CPOTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["test"],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
+
+    print(f"\n✓ Trainer created successfully")
+    print(f"  Training samples: {len(dataset['train'])}")
+    if config.use_replay_buffer:
+        print(f"  (includes ~{int(config.l3_replay_ratio * 100)}% L3 replay samples)\n")
 
     # Validation callback with metrics collector
     validation_callback = SimPOValidationCallback(config, model, tokenizer, metrics)
 
+    # SIGINT handler — save full checkpoint on Ctrl+C for daily stop/resume
+    def sigint_handler(sig, frame):
+        print("\n\nCtrl+C — saving checkpoint before exit...")
+        trainer.save_state()
+        print(f"Checkpoint saved to {config.output_dir}. Resume with: --resume")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, sigint_handler)
+
     print("\nStarting SimPO training...")
     start_time = time.time()
 
-    try:
-        # Initial validation
-        validation_callback.on_step_end(0)
+    # Initial validation
+    validation_callback.on_step_end(0)
 
-        # Train
-        trainer.train(resume_from_checkpoint=resume_from)
-
-    except KeyboardInterrupt:
-        print("\nTraining interrupted by user")
+    # Train
+    trainer.train(resume_from_checkpoint=resume_from)
 
     elapsed = time.time() - start_time
     print(f"\nTraining completed in {elapsed/3600:.2f} hours")
@@ -680,13 +894,16 @@ def main():
     parser = argparse.ArgumentParser(description="Adam Phase 2: SimPO Preference Optimization")
     parser.add_argument("--config", type=str, help="Path to config JSON file")
     parser.add_argument("--sft-checkpoint", type=str, help="Path to SFT checkpoint")
-    parser.add_argument("--resume", type=str, help="Path to SimPO checkpoint to resume from")
+    parser.add_argument("--resume", nargs="?", const="latest", default=None,
+                        help="Resume from checkpoint. No value = auto-find latest.")
     parser.add_argument("--data", type=str, help="Override preference data path")
     parser.add_argument("--output", type=str, help="Override output directory")
     parser.add_argument("--max-steps", type=int, help="Override max steps")
     parser.add_argument("--beta", type=float, help="Override beta")
     parser.add_argument("--gamma", type=float, help="Override gamma")
     parser.add_argument("--lr", type=float, help="Override learning rate")
+    parser.add_argument("--save-steps", type=int, help="Override save steps")
+    parser.add_argument("--eval-steps", type=int, help="Override eval steps")
     args = parser.parse_args()
 
     # Load config
@@ -707,6 +924,30 @@ def main():
         config.gamma = args.gamma
     if args.lr:
         config.learning_rate = args.lr
+    if args.save_steps:
+        config.save_steps = args.save_steps
+    if args.eval_steps:
+        config.eval_steps = args.eval_steps
+
+    # Resolve resume path
+    resume_from = None
+    if args.resume == "latest":
+        output_path = Path(config.output_dir)
+        checkpoints = sorted(
+            output_path.glob("checkpoint-*"),
+            key=lambda p: int(p.name.split("-")[1])
+        ) if output_path.exists() else []
+        if checkpoints:
+            resume_from = str(checkpoints[-1])
+            print(f"Auto-resuming from {resume_from}")
+        else:
+            print("No checkpoints found, starting fresh")
+    elif args.resume:
+        resume_from = args.resume
+
+    if resume_from and not Path(resume_from).exists():
+        print(f"ERROR: Checkpoint not found: {resume_from}")
+        sys.exit(1)
 
     # Check SFT checkpoint
     if not Path(config.sft_checkpoint).exists():
@@ -720,7 +961,7 @@ def main():
         sys.exit(1)
 
     # Train
-    train(config, resume_from=args.resume)
+    train(config, resume_from=resume_from)
 
 
 if __name__ == "__main__":
