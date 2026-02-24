@@ -1,0 +1,7 @@
+{
+  "checkpoint": "adam_poc_sft_checkpoints/joint_training/checkpoint-3910",
+  "L1": 0.1,
+  "L2": 0.0,
+  "L3": 0.3833333333333333,
+  "L4": 0.36666666666666664
+}

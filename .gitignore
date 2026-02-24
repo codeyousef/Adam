@@ -24,6 +24,7 @@ adam_checkpoints/
 adam_sft_checkpoints/
 adam_simpo_checkpoints*/
 adam_daft_checkpoints*/
+adam_poc_checkpoints*/
 adam_uft_checkpoints/
 adam_ustuning_checkpoints/
 wise_ft_checkpoints/

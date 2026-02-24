@@ -292,7 +292,7 @@ HYPOTHESIS: Some wampimuk are borogove.
 
 Answer with PROVED, DISPROVED, or UNKNOWN.""",
         "expected_patterns": [r"UNKNOWN", r"cannot.*determined", r"undistributed.*middle"],
-        "forbidden_patterns": [r"PROVED", r"true", r"valid"],
+        "forbidden_patterns": [r"PROVED", r"true", r"\bvalid\b"],
     },
     {
         "name": "affirming_consequent",
