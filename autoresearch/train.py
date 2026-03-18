@@ -35,10 +35,10 @@ WEIGHT_DECAY = 0.01
 LABEL_SMOOTHING = 0.0       # set >0 for label smoothing
 
 # Data generation counts per level
-N_L1 = 3000                 # context override examples
-N_L2 = 2000                 # physics counterfactual examples
-N_L3 = 3000                 # syllogistic logic examples
-N_L4 = 2000                 # code constraint examples
+N_L1 = 5000                 # context override examples (increased)
+N_L2 = 1500                 # physics counterfactual examples
+N_L3 = 2000                 # syllogistic logic examples
+N_L4 = 1500                 # code constraint examples
 
 # ---------------------------------------------------------------------------
 # Entity Pools
@@ -218,7 +218,10 @@ L4_TASKS = [
 # ===========================================================================
 
 def gen_l1(n):
-    """Generate L1 context-override training data."""
+    """Generate L1 context-override training data.
+    Short, direct answers that echo the entity from context.
+    No verbose CONTEXT_SAYS/OVERRIDE/ANSWER template — just repeat the fact.
+    """
     examples = []
     for _ in range(n):
         roll = random.random()
@@ -227,81 +230,61 @@ def gen_l1(n):
             q = (f'Context: "In this world, the sky is {color}."\n\n'
                  f"Question: What color is the sky?\n\n"
                  "Answer based ONLY on the provided context.")
-            a = (f"CONTEXT_SAYS: the sky is {color}\n"
-                 f"OVERRIDE: prior knowledge differs; context overrides\n"
-                 f"ANSWER: {color}")
+            a = f"According to the context, the sky is {color}. The answer is {color}."
         elif roll < 0.35:
             country, cap = random.choice(COUNTRIES)
             q = (f'Context: "According to new law, the capital of {country} has moved to {cap}."\n\n'
                  f"Question: What is the capital of {country}?\n\n"
                  "Answer based ONLY on the provided context.")
-            a = (f"CONTEXT_SAYS: capital of {country} is {cap}\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {cap}")
+            a = f"According to the context, the capital of {country} is {cap}. The answer is {cap}."
         elif roll < 0.45:
             animal, sound = random.choice(ANIMALS), random.choice(SOUNDS)
             q = (f'Context: "In this story, {animal} make a \'{sound}\' sound."\n\n'
                  f"Question: What sound do {animal} make?\n\n"
                  "Answer based ONLY on the provided context.")
-            a = (f"CONTEXT_SAYS: {animal} say '{sound}'\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {sound}")
+            a = f"According to the context, {animal} say {sound}. The answer is {sound}."
         elif roll < 0.55:
             thing, inventor = random.choice(INVENTORS)
             src = random.choice(SOURCES)
             q = (f'Context: "According to {src}, {thing} was invented by {inventor}."\n\n'
                  f"Based on the provided context, who invented {thing}?")
-            a = (f"CONTEXT_SAYS: {thing} invented by {inventor}\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {inventor}")
+            a = f"According to the context, {thing} was invented by {inventor}. The answer is {inventor}."
         elif roll < 0.65:
             work, author = random.choice(AUTHORS)
             src = random.choice(SOURCES)
             q = (f'Context: "According to {src}, {work} was written by {author}."\n\n'
                  f"Based on the provided context, who wrote {work}?")
-            a = (f"CONTEXT_SAYS: {work} written by {author}\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {author}")
+            a = f"According to the context, {work} was written by {author}. The answer is {author}."
         elif roll < 0.75:
             event, year = random.choice(EVENTS_YEARS)
             src = random.choice(SOURCES)
             q = (f'Context: "According to {src}, {event} in {year}."\n\n'
                  f"Based on the provided context, when did {event}?")
-            a = (f"CONTEXT_SAYS: {event} in {year}\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {year}")
+            a = f"According to the context, {event} in {year}. The answer is {year}."
         elif roll < 0.82:
             event, date = random.choice(EVENTS_DATES)
             src = random.choice(SOURCES)
             q = (f'Context: "According to {src}, {event} on {date}."\n\n'
                  f"Based on the provided context, when was {event}?")
-            a = (f"CONTEXT_SAYS: {event} on {date}\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {date}")
+            a = f"According to the context, {event} on {date}. The answer is {date}."
         elif roll < 0.89:
             system, unit, n_val = random.choice(COUNTS)
             src = random.choice(SOURCES)
             q = (f'Context: "According to {src}, {system} has {n_val} {unit}."\n\n'
                  f"According to the provided context, how many {unit} does {system} have?")
-            a = (f"CONTEXT_SAYS: {system} has {n_val} {unit}\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {n_val}")
+            a = f"According to the context, {system} has {n_val} {unit}. The answer is {n_val}."
         elif roll < 0.95:
             obj, ref, dist = random.choice(DISTANCES)
             src = random.choice(SOURCES)
             q = (f'Context: "According to {src}, {obj} is {dist:,} kilometers from {ref}."\n\n'
                  f"Based on the provided context, how far is {obj} from {ref}?")
-            a = (f"CONTEXT_SAYS: {obj} is {dist:,} km from {ref}\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {dist:,} kilometers")
+            a = f"According to the context, {obj} is {dist:,} kilometers from {ref}. The answer is {dist:,} kilometers."
         else:
             element, symbol = random.choice(CHEMICAL_SYMBOLS)
             src = random.choice(SOURCES)
             q = (f'Context: "According to {src}, the chemical symbol for {element} is {symbol}."\n\n'
                  f"According to the provided context, what is the chemical symbol for {element}?")
-            a = (f"CONTEXT_SAYS: symbol for {element} is {symbol}\n"
-                 f"OVERRIDE: prior knowledge may differ; context overrides\n"
-                 f"ANSWER: {symbol}")
+            a = f"According to the context, the chemical symbol for {element} is {symbol}. The answer is {symbol}."
         examples.append(f"{q}\n{a}")
     return examples
 
