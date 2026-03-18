@@ -486,15 +486,17 @@ def generate_all_data():
 # ===========================================================================
 
 class SFTDataset(Dataset):
-    """Pre-tokenized dataset for CLM training."""
+    """Pre-tokenized dataset for CLM training, sorted by length for less padding."""
 
-    def __init__(self, texts, tokenizer, max_len=MAX_SEQ_LEN):
+    def __init__(self, texts, tokenizer, max_len=MAX_SEQ_LEN, sort_by_length=False):
         self.tokens = []
         for text in texts:
             ids = tokenizer(
                 text, truncation=True, max_length=max_len, add_special_tokens=False
             )["input_ids"]
             self.tokens.append(ids)
+        if sort_by_length:
+            self.tokens.sort(key=len)
 
     def __len__(self):
         return len(self.tokens)
@@ -556,7 +558,7 @@ def train():
 
     # ---- Tokenize ----
     print("Tokenizing...")
-    dataset = SFTDataset(texts, tokenizer)
+    dataset = SFTDataset(texts, tokenizer, sort_by_length=True)
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
     loader = DataLoader(
         dataset,
