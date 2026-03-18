@@ -541,6 +541,8 @@ def train():
     t_start = time.time()
     torch.manual_seed(42)
     random.seed(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # ---- Load model ----
     print("Loading model...")
