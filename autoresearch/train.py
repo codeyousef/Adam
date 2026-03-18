@@ -31,7 +31,7 @@ GRAD_ACCUM = 4              # effective batch = 8
 NUM_EPOCHS = 2              # passes over data
 MAX_GRAD_NORM = 10.0        # allow large initial gradients
 WARMUP_RATIO = 0.05         # warmup fraction
-WEIGHT_DECAY = 0.01
+WEIGHT_DECAY = 0.001
 LABEL_SMOOTHING = 0.0       # set >0 for label smoothing
 
 # Data generation counts per level
