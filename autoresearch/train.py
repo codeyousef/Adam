@@ -36,8 +36,8 @@ LABEL_SMOOTHING = 0.0       # set >0 for label smoothing
 
 # Data generation counts per level
 N_L1 = 5000                 # context override examples (increased)
-N_L2 = 1500                 # physics counterfactual examples
-N_L3 = 2000                 # syllogistic logic examples
+N_L2 = 2000                 # physics counterfactual examples
+N_L3 = 3000                 # syllogistic logic examples
 N_L4 = 1500                 # code constraint examples
 
 # ---------------------------------------------------------------------------
@@ -290,43 +290,46 @@ def gen_l1(n):
 
 
 def gen_l2(n):
-    """Generate L2 counterfactual-physics training data."""
+    """Generate L2 counterfactual-physics training data. Short answers."""
     examples = []
     for _ in range(n):
         roll = random.random()
         if roll < 0.25:
             g = random.choice(GRAVITY_VALUES)
             if g == 0:
-                result = "does not fall; stays in place (no gravitational force acts)"
+                result = "g = 0, so the ball does not fall. It stays in place and floats indefinitely."
             elif g < 0:
-                result = f"rises upward; accelerates up at {abs(g)} m/s\u00b2"
+                result = f"g = {g}, so the ball rises upward, accelerating up at {abs(g)} m/s\u00b2."
             else:
                 t = round((2 * 10 / g) ** 0.5, 2)
-                result = f"hits ground in approximately {t} seconds"
+                result = f"g = {g}, so the ball hits the ground in approximately {t} seconds."
             q = (f"In this scenario, gravitational acceleration g = {g} m/s\u00b2.\n"
                  "A ball is released from rest at height 10 m. What happens?\n"
                  "Use ONLY g as given.")
-            a = f"CONSTANTS: g = {g}\nRESULT: {result}"
+            a = result
         elif roll < 0.45:
             temp = random.choice(BOIL_TEMPS)
             water_temp = random.choice([40, 60, 70, 90, 110, 130])
             boiling = water_temp >= temp
-            result = "YES, boiling" if boiling else f"NOT boiling (needs {temp} unit_temp)"
+            if boiling:
+                result = f"Water boils at {temp} unit_temp. At {water_temp} unit_temp, YES it is boiling."
+            else:
+                result = f"Water boils at {temp} unit_temp. At {water_temp} unit_temp, NOT boiling (needs {temp})."
             q = (f"In this scenario, water boils at B_var = {temp} unit_temp.\n"
                  f"Water is heated to {water_temp} unit_temp. Is it boiling?\n"
                  "Use ONLY B_var as given.")
-            a = f"CONSTANTS: B_var={temp}\nRESULT: {result}"
+            a = result
         elif roll < 0.60:
             mu = random.choice(FRICTION_VALUES)
             if mu == 0:
-                result = ("The object maintains constant velocity of 5 m/s forever. "
-                          "With \u03bc = 0 there is no friction force; it never stops and slides indefinitely.")
+                result = ("\u03bc = 0, so there is no friction. "
+                          "The object maintains constant velocity of 5 m/s forever and never stops.")
             else:
-                result = f"The object decelerates due to friction (\u03bc = {mu}). It will eventually stop."
+                result = f"\u03bc = {mu}, so friction decelerates the object. It will eventually stop."
             q = (f"In this scenario, the coefficient of kinetic friction is \u03bc = {mu}.\n"
                  "An object slides on a surface with initial velocity 5 m/s. What happens?\n"
                  "Use ONLY \u03bc as given.")
-            a = f"CONSTANTS: \u03bc = {mu}\nRESULT: {result}"
+            a = result
         elif roll < 0.80:
             pi_val = random.choice(PI_VALUES)
             r = random.choice(PI_RADII)
@@ -334,9 +337,7 @@ def gen_l2(n):
             q = (f"In this scenario, \u03c0 = {pi_val} (altered mathematical constant).\n"
                  f"A circle has radius {r}. What is its circumference?\n"
                  f"Use ONLY \u03c0 = {pi_val} as given. Formula: C = 2 \u00d7 \u03c0 \u00d7 r.")
-            a = (f"CONSTANTS: \u03c0 = {pi_val}, r = {r}\n"
-                 f"STEPS: C = 2 \u00d7 \u03c0 \u00d7 r = 2 \u00d7 {pi_val} \u00d7 {r}\n"
-                 f"RESULT: circumference = {circ}")
+            a = f"C = 2 \u00d7 {pi_val} \u00d7 {r} = {circ}. The circumference is {circ}."
         else:
             c = random.choice(LIGHT_SPEEDS)
             dist = random.choice([100, 300, 500, 1000, 5000])
@@ -344,9 +345,7 @@ def gen_l2(n):
             q = (f"In this scenario, speed of light c = {c} m/s.\n"
                  f"A light source is {dist} m away. How long does light take to travel?\n"
                  "Use ONLY c as given.")
-            a = (f"CONSTANTS: c = {c} m/s, distance = {dist} m\n"
-                 f"Step 1: t = distance / c = {dist} / {c} = {t}\n"
-                 f"RESULT: {t} seconds")
+            a = f"t = {dist} / {c} = {t} seconds."
         examples.append(f"{q}\n{a}")
     return examples
 
