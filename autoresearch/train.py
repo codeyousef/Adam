@@ -289,62 +289,95 @@ def gen_l1(n):
     return examples
 
 
+L2_PREFIXES = [
+    "In this scenario, ",
+    "In this hypothetical scenario, ",
+    "In this hypothetical world, ",
+    "In this universe, ",
+]
+
+L2_SUFFIXES = [
+    "Use ONLY the values given.",
+    "You MUST use ONLY the physics rules specified.",
+    "Calculate using ONLY the constants specified.",
+    "Use ONLY the physics specified.",
+]
+
+
 def gen_l2(n):
-    """Generate L2 counterfactual-physics training data. Short answers."""
+    """Generate L2 counterfactual-physics training data. Short answers, diverse phrasings."""
     examples = []
     for _ in range(n):
+        pfx = random.choice(L2_PREFIXES)
+        sfx = random.choice(L2_SUFFIXES)
         roll = random.random()
         if roll < 0.25:
             g = random.choice(GRAVITY_VALUES)
             if g == 0:
-                result = "g = 0, so the ball does not fall. It stays in place and floats indefinitely."
+                result = f"g = 0, so the ball does not fall. It stays in place and floats indefinitely."
             elif g < 0:
                 result = f"g = {g}, so the ball rises upward, accelerating up at {abs(g)} m/s\u00b2."
             else:
                 t = round((2 * 10 / g) ** 0.5, 2)
                 result = f"g = {g}, so the ball hits the ground in approximately {t} seconds."
-            q = (f"In this scenario, gravitational acceleration g = {g} m/s\u00b2.\n"
-                 "A ball is released from rest at height 10 m. What happens?\n"
-                 "Use ONLY g as given.")
+            grav_desc = random.choice([
+                f"gravitational acceleration g = {g} m/s\u00b2",
+                f"gravitational acceleration is exactly {g} m/s\u00b2" + (" (no gravity exists)" if g == 0 else f" (gravity {'pushes upward' if g < 0 else 'pulls downward'})"),
+            ])
+            q = (f"{pfx}{grav_desc}.\n\n"
+                 "A ball is released from rest at a height of 10 meters. What happens?\n\n"
+                 f"{sfx}")
             a = result
         elif roll < 0.45:
             temp = random.choice(BOIL_TEMPS)
             water_temp = random.choice([40, 60, 70, 90, 110, 130])
             boiling = water_temp >= temp
             if boiling:
-                result = f"Water boils at {temp} unit_temp. At {water_temp} unit_temp, YES it is boiling."
+                result = f"Water boils at {temp}. At {water_temp}, YES it is boiling."
             else:
-                result = f"Water boils at {temp} unit_temp. At {water_temp} unit_temp, NOT boiling (needs {temp})."
-            q = (f"In this scenario, water boils at B_var = {temp} unit_temp.\n"
-                 f"Water is heated to {water_temp} unit_temp. Is it boiling?\n"
-                 "Use ONLY B_var as given.")
+                result = f"Water boils at {temp}. At {water_temp}, NOT boiling (needs {temp})."
+            q = (f"{pfx}water boils at {temp} degrees.\n\n"
+                 f"Water is heated to {water_temp} degrees. Is it boiling?\n\n"
+                 f"{sfx}")
             a = result
         elif roll < 0.60:
             mu = random.choice(FRICTION_VALUES)
             if mu == 0:
-                result = ("\u03bc = 0, so there is no friction. "
-                          "The object maintains constant velocity of 5 m/s forever and never stops.")
+                result = (f"\u03bc = 0, so there is no friction. "
+                          "The object maintains constant velocity of 5 m/s forever and never stops. It slides indefinitely.")
             else:
                 result = f"\u03bc = {mu}, so friction decelerates the object. It will eventually stop."
-            q = (f"In this scenario, the coefficient of kinetic friction is \u03bc = {mu}.\n"
-                 "An object slides on a surface with initial velocity 5 m/s. What happens?\n"
-                 "Use ONLY \u03bc as given.")
+            fric_desc = random.choice([
+                f"the coefficient of kinetic friction is \u03bc = {mu}",
+                f"the coefficient of friction is exactly {mu}" + (" for all surfaces" if mu == 0 else ""),
+            ])
+            q = (f"{pfx}{fric_desc}.\n\n"
+                 "An object slides on a surface with initial velocity 5 m/s. What happens?\n\n"
+                 f"{sfx}")
             a = result
         elif roll < 0.80:
             pi_val = random.choice(PI_VALUES)
             r = random.choice(PI_RADII)
             circ = 2 * pi_val * r
-            q = (f"In this scenario, \u03c0 = {pi_val} (altered mathematical constant).\n"
-                 f"A circle has radius {r}. What is its circumference?\n"
-                 f"Use ONLY \u03c0 = {pi_val} as given. Formula: C = 2 \u00d7 \u03c0 \u00d7 r.")
+            pi_desc = random.choice([
+                f"\u03c0 = {pi_val} (altered mathematical constant)",
+                f"\u03c0 (pi) is defined as exactly {pi_val}",
+            ])
+            q = (f"{pfx}{pi_desc}.\n\n"
+                 f"Calculate the circumference of a circle with radius {r}.\n\n"
+                 f"Use ONLY the value of \u03c0 specified (\u03c0={pi_val}).")
             a = f"C = 2 \u00d7 {pi_val} \u00d7 {r} = {circ}. The circumference is {circ}."
         else:
             c = random.choice(LIGHT_SPEEDS)
             dist = random.choice([100, 300, 500, 1000, 5000])
             t = round(dist / c, 4)
-            q = (f"In this scenario, speed of light c = {c} m/s.\n"
-                 f"A light source is {dist} m away. How long does light take to travel?\n"
-                 "Use ONLY c as given.")
+            c_desc = random.choice([
+                f"speed of light c = {c} m/s",
+                f"the speed of light is exactly {c} m/s",
+            ])
+            q = (f"{pfx}{c_desc}.\n\n"
+                 f"How long would it take light to travel {dist} meters?\n\n"
+                 f"{sfx}")
             a = f"t = {dist} / {c} = {t} seconds."
         examples.append(f"{q}\n{a}")
     return examples
@@ -636,6 +669,13 @@ def train():
         actual = metrics[level]
         status = "PASS" if actual >= target else "FAIL"
         print(f"  {level}: {actual:.1f}% / {target:.0f}% [{status}]")
+
+    # Dump first 300 chars of each probe output for debugging
+    print("\n=== PROBE OUTPUTS ===")
+    for level_key in ["L1", "L2", "L3", "L4"]:
+        if level_key in metrics.get("details", {}):
+            for p in metrics["details"][level_key]:
+                print(f"[{level_key}] {p['name']} ({'PASS' if p['passed'] else 'FAIL'} {p['score']:.2f}): {p['output'][:200]}")
 
 
 if __name__ == "__main__":
