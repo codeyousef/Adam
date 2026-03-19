@@ -147,7 +147,7 @@ def should_keep(candidate: Metrics, best: Metrics) -> bool:
     return False
 
 
-L1_PROBE_HELPER = '''def _gen_l1_probe_shaped_example():
+L1_PROBE_HELPER = r'''def _gen_l1_probe_shaped_example():
     """Generate an L1 example using validation-like prompt shapes with varied values."""
     roll = random.random()
     if roll < 0.10:
@@ -267,15 +267,18 @@ def candidate_queue() -> list[Experiment]:
 
 def run_experiment(commit_message: str, description: str) -> tuple[str, Metrics]:
     commit = git_commit(commit_message)
-    with RUN_LOG_PATH.open("w") as fh:
-        subprocess.run(
-            [str(PYTHON), str(AUTORESEARCH_DIR / "train.py")],
-            cwd=ROOT,
-            stdout=fh,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=True,
-        )
+    try:
+        with RUN_LOG_PATH.open("w") as fh:
+            subprocess.run(
+                [str(PYTHON), str(AUTORESEARCH_DIR / "train.py")],
+                cwd=ROOT,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=True,
+            )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Experiment {commit} failed") from exc
     metrics = parse_metrics_from_run_log()
     return commit, metrics
 
@@ -300,7 +303,14 @@ def main() -> int:
             continue
 
         write_train_text(mutated)
-        commit, metrics = run_experiment(experiment.description, experiment.description)
+        try:
+            commit, metrics = run_experiment(experiment.description, experiment.description)
+        except Exception as exc:
+            failed_commit = run_cmd(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
+            print(f"{failed_commit} -> failed: {exc}")
+            git_revert_head()
+            continue
+
         keep = should_keep(metrics, best)
         append_results(commit, metrics, "keep" if keep else "discard", experiment.description)
         print(f"{commit} -> pi={metrics.pi_score:.1f} L1={metrics.l1:.1f} L2={metrics.l2:.1f} L3={metrics.l3:.1f} L4={metrics.l4:.1f} [{ 'keep' if keep else 'discard' }]")
