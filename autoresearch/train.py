@@ -467,12 +467,11 @@ def gen_l4(n):
     examples = []
     for _ in range(n):
         task = random.choice(L4_TASKS)
-        q = (f"Write a Python function that {task['desc']}.\n\n"
-             f"FORBIDDEN: {task['forbidden']}\n\n"
-             "Use only basic Python (loops, comparisons, built-in data structures). No imports.")
-        a = (f"CONSTRAINT: must not use {task['forbidden']}\n"
-             f"APPROACH: Iterate through elements using a for-loop and track the result manually\n"
-             f"CODE:\n{task['sig']}\n{task['impl']}")
+        q = (f"Write a Python function that {task['desc']}.\n"
+             f"FORBIDDEN: {task['forbidden']}\n"
+             "Use only basic Python (loops, comparisons). No imports.\n\n"
+             "Solution:")
+        a = (f"\n{task['sig']}\n{task['impl']}")
         examples.append(f"{q}\n{a}")
     return examples
 
