@@ -44,10 +44,10 @@ WARMUP_RATIO = 0.05         # warmup fraction
 WEIGHT_DECAY = 0.001        # from PoC autoresearch finding
 
 # Data generation counts per level
-N_L1 = 3500                 # context override is saturated; free budget for L2
-N_L2 = 5500                 # physics counterfactual examples need the most help
-N_L3 = 5000                 # keep the current strong L3 mix stable
-N_L4 = 3000                 # keep the separator-based L4 improvement intact
+N_L1 = 5000                 # context override examples (already at target)
+N_L2 = 4000                 # physics counterfactual examples (doubled)
+N_L3 = 5000                 # syllogistic logic examples (increased)
+N_L4 = 3000                 # code constraint examples (doubled)
 
 # ---------------------------------------------------------------------------
 # Entity Pools
