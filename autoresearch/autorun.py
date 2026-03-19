@@ -65,6 +65,9 @@ def run_cmd(args: list[str], *, capture: bool = True) -> subprocess.CompletedPro
 
 def git_commit(message: str) -> str:
     run_cmd(["git", "add", str(TRAIN_PATH.relative_to(ROOT))], capture=False)
+    status = run_cmd(["git", "status", "--porcelain", str(TRAIN_PATH.relative_to(ROOT))]).stdout.strip()
+    if not status:
+        raise RuntimeError(f"Transform produced no change in train.py — skipping: {message}")
     run_cmd(["git", "commit", "-m", message], capture=False)
     return run_cmd(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
 
@@ -265,8 +268,9 @@ def candidate_queue() -> list[Experiment]:
     ]
 
 
-def run_experiment(commit_message: str, description: str) -> tuple[str, Metrics]:
-    commit = git_commit(commit_message)
+def run_training(commit: str) -> Metrics:
+    env = os.environ.copy()
+    env["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
     try:
         with RUN_LOG_PATH.open("w") as fh:
             subprocess.run(
@@ -276,11 +280,11 @@ def run_experiment(commit_message: str, description: str) -> tuple[str, Metrics]
                 stderr=subprocess.STDOUT,
                 text=True,
                 check=True,
+                env=env,
             )
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"Experiment {commit} failed") from exc
-    metrics = parse_metrics_from_run_log()
-    return commit, metrics
+        raise RuntimeError(f"Experiment {commit} training failed") from exc
+    return parse_metrics_from_run_log()
 
 
 def main() -> int:
@@ -304,10 +308,17 @@ def main() -> int:
 
         write_train_text(mutated)
         try:
-            commit, metrics = run_experiment(experiment.description, experiment.description)
+            commit = git_commit(experiment.description)
         except Exception as exc:
-            failed_commit = run_cmd(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
-            print(f"{failed_commit} -> failed: {exc}")
+            # commit never happened; restore file from git and skip
+            run_cmd(["git", "checkout", "HEAD", "--", str(TRAIN_PATH.relative_to(ROOT))], capture=False)
+            print(f"Skipping experiment (commit failed): {exc}")
+            continue
+
+        try:
+            metrics = run_training(commit)
+        except Exception as exc:
+            print(f"{commit} -> failed: {exc}")
             git_revert_head()
             continue
 
