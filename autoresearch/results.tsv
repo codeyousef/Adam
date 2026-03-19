@@ -1,0 +1,49 @@
+commit 	 pi_score	 L1  	 L2  	 L3  	 L4  	 peak_vram_gb	 status 	 description
+423d04c	     28.8	  5.0	 20.0	 56.7	 33.3	          4.9	 keep   	 baseline
+62f6a5c	     27.1	  6.7	  6.7	 58.3	 36.7	          4.9	 discard	 copy tasks interleaved (4k)
+fcab95b	     36.5	 30.0	  0.0	 50.0	 65.8	          4.9	 keep   	 simplified L1 format + L1 reweight
+e8fcc47	     36.5	 30.0	 13.3	 45.0	 57.5	          4.9	 discard	 ultra-short L1 + restored L2/L3 counts
+362b324	     38.5	 40.0	  0.0	 51.7	 62.5	          4.9	 keep   	 simplified L2 + restored L2/L3 counts
+1c68b52	     40.5	 43.3	 23.3	 58.3	 37.1	          4.9	 keep   	 diverse L2 phrasings + debug output
+df12b96	     33.8	 35.0	  0.0	 60.0	 40.0	          4.9	 discard	 simplified L4 + trimmed to 10k
+e5303e3	     31.9	 35.0	  0.0	 51.7	 40.8	          4.9	 discard	 simplified L4 only
+d72fd9f	     33.8	 15.0	 13.3	 51.7	 55.0	          4.9	 discard	 grad_accum=2
+2075460	     24.6	 25.0	 14.2	 48.3	 10.8	          4.9	 discard	 answer-only loss masking
+af08d67	     32.3	 30.0	 13.3	 51.7	 34.2	          4.9	 discard	 random novel L1 entities
+0b03e3b	     32.7	 25.0	 24.2	 36.7	 45.0	          4.9	 discard	 NUM_EPOCHS=3 slower LR decay
+d6bf267	     31.2	 25.0	  0.0	 51.7	 48.3	          4.9	 discard	 diverse L1 phrasings
+fb3481b	     35.0	 30.0	 30.0	 51.7	 28.3	          4.9	 discard	 targeted probe sources + simple_fact
+222fa9d	     37.5	 55.0	 35.0	 50.0	 10.0	          4.9	 discard	 two-phase 60/40 (L1+L2 then all)
+4df730c	     37.1	 45.0	  6.7	 68.3	 28.3	          4.9	 discard	 two-phase 40/60
+30a9c43	     30.4	 45.0	 13.3	 51.7	 11.7	          4.9	 discard	 two-phase 50/50
+5b0fb8f	     35.0	 25.0	 13.3	 35.0	 66.7	          4.9	 discard	 shortened L3 answers
+c7ed9fc	     29.8	 25.0	  6.7	 36.7	 50.8	          4.9	 discard	 seed=7
+a311dfe	     30.0	 30.0	 13.3	 51.7	 25.0	          4.9	 discard	 label_smoothing=0.1
+2fafe4c	     41.7	 35.0	 20.0	 48.3	 63.3	          4.9	 keep   	 length-sorted batching
+099bfe7	     45.6	 35.0	 28.3	 66.7	 52.5	          4.9	 keep   	 weight_decay=0.001
+b86b5a0	     40.6	 35.0	 15.0	 50.0	 62.5	          4.9	 discard	 weight_decay=0.0
+e8a7cfa	     34.8	 13.3	 13.3	 68.3	 44.2	          4.9	 discard	 warmup=10%
+d0821df	     28.7	 25.0	 15.0	 51.7	 23.3	          4.9	 discard	 rebalanced data (more L4)
+e75e0aa	     11.2	 15.0	  0.0	 30.0	  0.0	          4.9	 discard	 LR=3e-4
+e2263ba	     32.9	 20.0	 13.3	 51.7	 46.7	          5.3	 discard	 no gradient checkpointing
+494910d	     34.0	 40.0	 17.5	 45.0	 33.3	          4.9	 discard	 LR=7e-4
+61ec444	     29.8	 30.0	 16.7	 45.0	 27.5	          4.9	 discard	 beta2=0.999
+a05300d	     36.7	 13.3	 23.3	 75.0	 35.0	          4.9	 discard	 batch4_grad2
+9453449	     33.1	 28.3	 14.2	 56.7	 33.3	          4.9	 discard	 grad_clip=5
+da51fb5	     30.8	 25.0	 30.0	 50.0	 18.3	          4.9	 discard	 two-phase+wd0.001+len_sort
+147976b	     35.4	 45.0	 20.0	 38.3	 38.3	          4.9	 discard	 data_seed=17
+7dfcd8a	      1.2	  5.0	  0.0	  0.0	  0.0	          4.9	 discard	 freeze 16/24 layers
+97cf1f3	     34.8	 23.3	 13.3	 51.7	 50.8	          4.9	 discard	 probe format injection (250 ex)
+fe1dbfa	     31.8	 30.0	 20.0	 41.7	 35.4	          4.9	 discard	 NUM_EPOCHS=4
+1ff8c3c	     37.1	 35.0	 16.7	 40.0	 56.7	          4.9	 discard	 constant LR (no decay)
+c94b2a1	     37.3	 40.0	 15.0	 36.7	 57.5	          4.9	 discard	 min_lr_frac=0.1
+818e1f9	     37.5	 20.0	 28.3	 51.7	 50.0	          4.9	 discard	 L1 echo context sentence
+872d994	     34.4	 20.0	 13.3	 51.7	 52.5	          4.9	 discard	 L1 2x loss weight
+1e76d4c	     35.8	 20.0	 26.7	 51.7	 45.0	          4.9	 discard	 simplified L3+L4 combined
+0b58c48	     42.7	 33.2	 22.0	 58.0	 57.8	          4.9	 keep   	 cudnn.deterministic (mean of 11 runs, peak 46.5)
+4f12db0	33.3	15.0	26.7	36.7	55.0	4.9	discard	EOS token after answers
+a7e3263	2.1	5.0	3.3	0.0	0.0	4.9	discard	no-shuffle curriculum
+dbda339	36.8	-	-	-	-	4.9	discard	torch.compile (mean of 3)
+af975d0	11.4	-	-	-	-	4.9	discard	amsgrad=True (mean of 3)
+0dd8427	36.5	-	-	-	40.0	4.9	discard	remove L4 CONSTRAINT line (mean of 3)
+2f36343	42.0	-	-	-	-	4.9	discard	num_workers=4 (mean of 3)
