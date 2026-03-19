@@ -323,11 +323,9 @@ def gen_l2(n):
         if roll < 0.25:
             g = random.choice(GRAVITY_VALUES)
             if g == 0:
-                result = (f"g = 0, so there is no gravity. The ball does not fall. "
-                          "It stays in place, remaining stationary, and floats indefinitely.")
+                result = f"g = 0, so the ball does not fall. It stays in place and floats indefinitely."
             elif g < 0:
-                result = (f"g = {g}, so the ball rises upward and accelerates up at {abs(g)} m/s\u00b2. "
-                          "It does not fall down.")
+                result = f"g = {g}, so the ball rises upward, accelerating up at {abs(g)} m/s\u00b2."
             else:
                 t = round((2 * 10 / g) ** 0.5, 2)
                 result = f"g = {g}, so the ball hits the ground in approximately {t} seconds."
@@ -355,8 +353,7 @@ def gen_l2(n):
             mu = random.choice(FRICTION_VALUES)
             if mu == 0:
                 result = (f"\u03bc = 0, so there is no friction. "
-                          "The object maintains constant velocity of 5 m/s forever, "
-                          "it never stops, and slides indefinitely at 5 m/s.")
+                          "The object maintains constant velocity of 5 m/s forever and never stops. It slides indefinitely.")
             else:
                 result = f"\u03bc = {mu}, so friction decelerates the object. It will eventually stop."
             fric_desc = random.choice([
@@ -390,7 +387,7 @@ def gen_l2(n):
             q = (f"{pfx}{c_desc}.\n\n"
                  f"How long would it take light to travel {dist} meters?\n\n"
                  f"{sfx}")
-            a = f"t = distance / c = {dist} / {c} = {t}. The answer is {t} seconds."
+            a = f"t = {dist} / {c} = {t} seconds."
         examples.append(f"{q}\n{a}")
     return examples
 
