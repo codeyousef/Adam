@@ -499,13 +499,26 @@ def _gen_syllogism(form_pool):
          f"PREMISES:\n1. {p1}\n2. {p2}\n\n"
          f"HYPOTHESIS: {hyp}\n\n"
          "Answer with PROVED, DISPROVED, or UNKNOWN.")
-    a_text = (f"<|begin_of_thought|>\n"
-              f"Step 1: PARSE_PREMISES - P1: {p1} P2: {p2}\n"
-              f"Step 2: IDENTIFY_FORM - Detected: {form_name}\n"
-              f"Step 3: CHECK_VALIDITY - {check}\n"
-              f"Step 4: DETERMINE_CONCLUSION - {verdict}\n"
-              f"<|end_of_thought|>\n"
-              f"FORM: {form_name} VALIDITY: {verdict} REASON: {reason}")
+    if random.random() < 0.5:
+        a_text = (f"{verdict}\n"
+                  f"The conclusion cannot be determined from the premises. {check}\n"
+                  f"Form: {form_name}. Reason: {reason}")
+        if verdict == "PROVED":
+            a_text = (f"PROVED\n"
+                      f"This is valid: {form_name}. The conclusion follows from the premises.\n"
+                      f"Reason: {reason}")
+        elif verdict == "DISPROVED":
+            a_text = (f"DISPROVED\n"
+                      f"The premises contradict the hypothesis. Form: {form_name}.\n"
+                      f"Reason: {reason}")
+    else:
+        a_text = (f"<|begin_of_thought|>\n"
+                  f"Step 1: PARSE_PREMISES - P1: {p1} P2: {p2}\n"
+                  f"Step 2: IDENTIFY_FORM - Detected: {form_name}\n"
+                  f"Step 3: CHECK_VALIDITY - {check}\n"
+                  f"Step 4: DETERMINE_CONCLUSION - {verdict}\n"
+                  f"<|end_of_thought|>\n"
+                  f"FORM: {form_name} VALIDITY: {verdict} REASON: {reason}")
     return f"{q}\n{a_text}"
 
 
