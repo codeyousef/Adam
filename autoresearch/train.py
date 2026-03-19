@@ -169,13 +169,13 @@ L4_TASKS = [
         "desc": "sorts a list of integers in ascending order",
         "forbidden": "sorted(, .sort(, heapq",
         "sig": "def bubble_sort(nums: list) -> list:",
-        "impl": "    arr = list(nums)\n    n = len(arr)\n    for i in range(n):\n        for j in range(n - i - 1):\n            if arr[j] > arr[j + 1]:\n                arr[j], arr[j + 1] = arr[j + 1], arr[j]\n    return arr",
+        "impl": "    arr = list(nums)\n    n = len(arr)\n    i = 0\n    while i < n:\n        j = 0\n        while j < n - i - 1:\n            if arr[j] > arr[j + 1]:\n                arr[j], arr[j + 1] = arr[j + 1], arr[j]\n            j += 1\n        i += 1\n    return arr",
     },
     {
         "desc": "reverses a string without slicing",
         "forbidden": "[::-1], reversed(, .reverse(",
         "sig": "def reverse_string(s: str) -> str:",
-        "impl": "    result = ''\n    for i in range(len(s) - 1, -1, -1):\n        result += s[i]\n    return result",
+        "impl": "    result = ''\n    for ch in s:\n        result = ch + result\n    return result",
     },
     {
         "desc": "computes the sum of all numbers in a list",
@@ -217,7 +217,7 @@ L4_TASKS = [
         "desc": "checks if an element exists in a list",
         "forbidden": "any(, .index(, .count(",
         "sig": "def linear_search(lst: list, target) -> int:",
-        "impl": "    for i in range(len(lst)):\n        if lst[i] == target:\n            return i\n    return -1",
+        "impl": "    index = 0\n    for item in lst:\n        if item == target:\n            return index\n        index += 1\n    return -1",
     },
 ]
 
