@@ -239,31 +239,276 @@ def set_l1_probe_ratio(text: str, ratio: float) -> str:
     return text
 
 
-def set_counts(text: str, *, l1: int | None = None) -> str:
-    if l1 is not None:
-        text, count = re.subn(r"N_L1 = \d+", f"N_L1 = {l1}", text, count=1)
-        if count != 1:
-            raise RuntimeError("Could not update N_L1 in train.py")
+def set_counts(text: str, *, l1: int | None = None, l2: int | None = None,
+               l3: int | None = None, l4: int | None = None) -> str:
+    for var, val in [("N_L1", l1), ("N_L2", l2), ("N_L3", l3), ("N_L4", l4)]:
+        if val is not None:
+            text, count = re.subn(rf"{var} = \d+", f"{var} = {val}", text, count=1)
+            if count != 1:
+                raise RuntimeError(f"Could not update {var} in train.py")
     return text
+
+
+def replace_gen_l1(text: str, new_fn: str) -> str:
+    """Replace the gen_l1 function body in train.py with new_fn."""
+    pat = re.compile(r"def gen_l1\(n\):.*?    return examples\n", re.DOTALL)
+    m = pat.search(text)
+    if not m:
+        raise RuntimeError("Could not locate gen_l1 in train.py")
+    return text[:m.start()] + new_fn + text[m.end():]
+
+
+def isolate_level_seeds(text: str) -> str:
+    """Make each level's data generation use its own seed, preventing cross-contamination."""
+    old = (
+        "    random.seed(42)\n"
+        "    data = []\n"
+        "    data.extend(gen_l1(N_L1))\n"
+        "    data.extend(gen_l2(N_L2))\n"
+        "    data.extend(gen_l3(N_L3))\n"
+        "    data.extend(gen_l4(N_L4))\n"
+        "    random.shuffle(data)"
+    )
+    new = (
+        "    data = []\n"
+        "    random.seed(42); data.extend(gen_l1(N_L1))\n"
+        "    random.seed(43); data.extend(gen_l2(N_L2))\n"
+        "    random.seed(44); data.extend(gen_l3(N_L3))\n"
+        "    random.seed(45); data.extend(gen_l4(N_L4))\n"
+        "    random.seed(99); random.shuffle(data)"
+    )
+    if old not in text:
+        raise RuntimeError("Could not find generate_all_data seeding block in train.py")
+    return text.replace(old, new, 1)
+
+
+def set_hyperparam(text: str, name: str, value: str) -> str:
+    """Replace a top-level scalar hyperparameter in train.py."""
+    pattern = re.compile(rf"^{re.escape(name)} = .*$", re.MULTILINE)
+    new_text, count = pattern.subn(f"{name} = {value}", text, count=1)
+    if count != 1:
+        raise RuntimeError(f"Could not find hyperparameter {name} in train.py")
+    return new_text
+
+
+def get_gen_l1_variant(name: str) -> str:
+    """Read a gen_l1 variant from its source file in autoresearch/.
+    The variant file contains only the gen_l1 function definition (no imports).
+    It is read as plain text and injected into train.py via replace_gen_l1.
+    """
+    path = AUTORESEARCH_DIR / f"gen_l1_{name}.py"
+    src = path.read_text()
+    # Strip the module-level docstring (triple-quoted string before def gen_l1)
+    import ast as _ast
+    tree = _ast.parse(src)
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.FunctionDef) and node.name == "gen_l1":
+            # Return from 'def gen_l1' onward
+            lines = src.splitlines(keepends=True)
+            return "".join(lines[node.lineno - 1:])
+    raise RuntimeError(f"Could not find gen_l1 function in {path}")
+
+
+# ---------------------------------------------------------------------------
+# DEAD CODE BELOW — GEN_L1_VALUE_FIRST kept for reference only, NOT used
+# ---------------------------------------------------------------------------
+GEN_L1_VALUE_FIRST = r'''def gen_l1(n):
+    """Generate L1 context-override training data.
+    Value-first answers to match probe output expectations.
+    """
+    examples = []
+    for _ in range(n):
+        roll = random.random()
+        if roll < 0.20:
+            color = random.choice(COLORS)
+            q = (f'Context: "In this world, the sky is {color}."\'\n\n'
+                 f"Question: What color is the sky?\'\n\n"
+                 "Answer based ONLY on the provided context.")
+            a = f"{color}. According to the context, the sky is {color}."
+        elif roll < 0.35:
+            country, cap = random.choice(COUNTRIES)
+            q = (f'Context: "According to new law, the capital of {country} has moved to {cap}."\'\n\n'
+                 f"Question: What is the capital of {country}?\'\n\n"
+                 "Answer based ONLY on the provided context.")
+            a = f"{cap}. According to the context, the capital of {country} is {cap}."
+        elif roll < 0.45:
+            animal, sound = random.choice(ANIMALS), random.choice(SOUNDS)
+            q = (f'Context: "In this story, {animal} make a \\'{sound}\\' sound."\'\n\n'
+                 f"Question: What sound do {animal} make?\'\n\n"
+                 "Answer based ONLY on the provided context.")
+            a = f"{sound}. According to the context, {animal} say {sound}."
+        elif roll < 0.55:
+            thing, inventor = random.choice(INVENTORS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {thing} was invented by {inventor}."\'\n\n'
+                 f"Based on the provided context, who invented {thing}?")
+            a = f"{inventor}. According to the context, {thing} was invented by {inventor}."
+        elif roll < 0.65:
+            work, author = random.choice(AUTHORS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {work} was written by {author}."\'\n\n'
+                 f"Based on the provided context, who wrote {work}?")
+            a = f"{author}. According to the context, {work} was written by {author}."
+        elif roll < 0.75:
+            event, year = random.choice(EVENTS_YEARS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {event} in {year}."\'\n\n'
+                 f"Based on the provided context, when did {event}?")
+            a = f"{year}. According to the context, {event} in {year}."
+        elif roll < 0.82:
+            event, date = random.choice(EVENTS_DATES)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {event} on {date}."\'\n\n'
+                 f"Based on the provided context, when was {event}?")
+            a = f"{date}. According to the context, {event} on {date}."
+        elif roll < 0.89:
+            system, unit, n_val = random.choice(COUNTS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {system} has {n_val} {unit}."\'\n\n'
+                 f"According to the provided context, how many {unit} does {system} have?")
+            a = f"{n_val}. According to the context, {system} has {n_val} {unit}."
+        elif roll < 0.95:
+            obj, ref, dist = random.choice(DISTANCES)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {obj} is {dist:,} kilometers from {ref}."\'\n\n'
+                 f"Based on the provided context, how far is {obj} from {ref}?")
+            a = f"{dist:,} kilometers. According to the context, {obj} is {dist:,} kilometers from {ref}."
+        else:
+            element, symbol = random.choice(CHEMICAL_SYMBOLS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, the chemical symbol for {element} is {symbol}."\'\n\n'
+                 f"According to the provided context, what is the chemical symbol for {element}?")
+            a = f"{symbol}. According to the context, the chemical symbol for {element} is {symbol}."
+        examples.append(f"{q}\n{a}")
+    return examples
+'''
+
+# Value-first answers + new boil-temp branch (covers probe #3)
+GEN_L1_BOIL_VALUE_FIRST = r'''def gen_l1(n):
+    """Generate L1 context-override training data.
+    Value-first answers; adds boil-temp branch to cover probe #3.
+    """
+    examples = []
+    for _ in range(n):
+        roll = random.random()
+        if roll < 0.18:
+            color = random.choice(COLORS)
+            q = (f'Context: "In this world, the sky is {color}."\'\n\n'
+                 f"Question: What color is the sky?\'\n\n"
+                 "Answer based ONLY on the provided context.")
+            a = f"{color}. According to the context, the sky is {color}."
+        elif roll < 0.30:
+            country, cap = random.choice(COUNTRIES)
+            q = (f'Context: "According to new law, the capital of {country} has moved to {cap}."\'\n\n'
+                 f"Question: What is the capital of {country}?\'\n\n"
+                 "Answer based ONLY on the provided context.")
+            a = f"{cap}. According to the context, the capital of {country} is {cap}."
+        elif roll < 0.38:
+            temp = random.choice(BOIL_TEMPS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, water boils at {temp} degrees Celsius."\'\n\n'
+                 "Question: At what temperature does water boil?\n\n"
+                 "Answer based ONLY on the provided context.")
+            a = f"{temp}. According to the context, water boils at {temp} degrees Celsius."
+        elif roll < 0.46:
+            animal, sound = random.choice(ANIMALS), random.choice(SOUNDS)
+            q = (f'Context: "In this story, {animal} make a \\'{sound}\\' sound."\'\n\n'
+                 f"Question: What sound do {animal} make?\'\n\n"
+                 "Answer based ONLY on the provided context.")
+            a = f"{sound}. According to the context, {animal} say {sound}."
+        elif roll < 0.56:
+            thing, inventor = random.choice(INVENTORS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {thing} was invented by {inventor}."\'\n\n'
+                 f"Based on the provided context, who invented {thing}?")
+            a = f"{inventor}. According to the context, {thing} was invented by {inventor}."
+        elif roll < 0.65:
+            work, author = random.choice(AUTHORS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {work} was written by {author}."\'\n\n'
+                 f"Based on the provided context, who wrote {work}?")
+            a = f"{author}. According to the context, {work} was written by {author}."
+        elif roll < 0.73:
+            event, year = random.choice(EVENTS_YEARS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {event} in {year}."\'\n\n'
+                 f"Based on the provided context, when did {event}?")
+            a = f"{year}. According to the context, {event} in {year}."
+        elif roll < 0.80:
+            event, date = random.choice(EVENTS_DATES)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {event} on {date}."\'\n\n'
+                 f"Based on the provided context, when was {event}?")
+            a = f"{date}. According to the context, {event} on {date}."
+        elif roll < 0.87:
+            system, unit, n_val = random.choice(COUNTS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {system} has {n_val} {unit}."\'\n\n'
+                 f"According to the provided context, how many {unit} does {system} have?")
+            a = f"{n_val}. According to the context, {system} has {n_val} {unit}."
+        elif roll < 0.94:
+            obj, ref, dist = random.choice(DISTANCES)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, {obj} is {dist:,} kilometers from {ref}."\'\n\n'
+                 f"Based on the provided context, how far is {obj} from {ref}?")
+            a = f"{dist:,} kilometers. According to the context, {obj} is {dist:,} kilometers from {ref}."
+        else:
+            element, symbol = random.choice(CHEMICAL_SYMBOLS)
+            src = random.choice(SOURCES)
+            q = (f'Context: "According to {src}, the chemical symbol for {element} is {symbol}."\'\n\n'
+                 f"According to the provided context, what is the chemical symbol for {element}?")
+            a = f"{symbol}. According to the context, the chemical symbol for {element} is {symbol}."
+        examples.append(f"{q}\n{a}")
+    return examples
+'''
 
 
 def candidate_queue() -> list[Experiment]:
     return [
+        # --- Targeted L1 fixes: most likely to help, lowest regression risk ---
         Experiment(
-            "add L1 probe-shaped examples ratio 0.10",
-            lambda text: set_l1_probe_ratio(text, 0.10),
+            "gen_l1 boil-temp coverage + value-first answers",
+            lambda text: replace_gen_l1(text, get_gen_l1_variant("boil_value_first")),
         ),
         Experiment(
-            "add L1 probe-shaped examples ratio 0.20",
-            lambda text: set_l1_probe_ratio(text, 0.20),
+            "gen_l1 value-first answers only (no new branches)",
+            lambda text: replace_gen_l1(text, get_gen_l1_variant("value_first")),
+        ),
+        # --- Seed isolation: hypothesis that L3 collapse was seed contamination ---
+        Experiment(
+            "per-level seed isolation in generate_all_data",
+            isolate_level_seeds,
         ),
         Experiment(
-            "add L1 probe-shaped examples ratio 0.30",
-            lambda text: set_l1_probe_ratio(text, 0.30),
+            "gen_l1 boil-temp + value-first + per-level seeds",
+            lambda text: isolate_level_seeds(replace_gen_l1(text, get_gen_l1_variant("boil_value_first"))),
+        ),
+        # --- Count rebalance: protect fragile L3 and grow L1 coverage ---
+        Experiment(
+            "rebalance N_L1=4000 N_L3=6000",
+            lambda text: set_counts(text, l1=4000, l3=6000),
         ),
         Experiment(
-            "raise L1 count with probe-shaped ratio 0.20",
-            lambda text: set_counts(set_l1_probe_ratio(text, 0.20), l1=5500),
+            "gen_l1 boil-temp + rebalance N_L1=4500 N_L3=5500",
+            lambda text: set_counts(replace_gen_l1(text, get_gen_l1_variant("boil_value_first")), l1=4500, l3=5500),
+        ),
+        # --- Training hyperparameters ---
+        Experiment(
+            "WEIGHT_DECAY=0.01 stronger regularization",
+            lambda text: set_hyperparam(text, "WEIGHT_DECAY", "0.01"),
+        ),
+        Experiment(
+            "GRAD_ACCUM=8 effective batch 16",
+            lambda text: set_hyperparam(text, "GRAD_ACCUM", "8"),
+        ),
+        # --- Combined experiments ---
+        Experiment(
+            "gen_l1 boil-temp + value-first + GRAD_ACCUM=8",
+            lambda text: set_hyperparam(replace_gen_l1(text, get_gen_l1_variant("boil_value_first")), "GRAD_ACCUM", "8"),
+        ),
+        Experiment(
+            "gen_l1 boil-temp + value-first + N_L1=5500",
+            lambda text: set_counts(replace_gen_l1(text, get_gen_l1_variant("boil_value_first")), l1=5500),
         ),
     ]
 
@@ -289,7 +534,7 @@ def run_training(commit: str) -> Metrics:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max-experiments", type=int, default=4)
+    parser.add_argument("--max-experiments", type=int, default=10)
     args = parser.parse_args()
 
     best = parse_best_keep()
