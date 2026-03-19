@@ -313,10 +313,76 @@ L2_SUFFIXES = [
 ]
 
 
+def _gen_l2_probe_shaped_example():
+    """Generate an L2 example using validation-like prompt shapes with varied values."""
+    roll = random.random()
+    if roll < 0.20:
+        g = random.choice([0, 0, 2, 5, 8, -5])
+        if g == 0:
+            q = ("In this hypothetical scenario, gravitational acceleration is exactly 0 m/s² "
+                 "(no gravity exists).\n\n"
+                 "A ball is released from rest at a height of 10 meters. Describe what happens to the ball.\n\n"
+                 "You MUST use ONLY the physics rules specified in this scenario (g=0).")
+            a = "g = 0, so there is no gravity. The ball does not fall, remains stationary, stays in place, and floats indefinitely."
+        elif g < 0:
+            q = (f"In this hypothetical scenario, gravitational acceleration is {g} m/s² "
+                 "(gravity pushes upward).\n\n"
+                 "A ball is released from rest at ground level. What happens?\n\n"
+                 f"You MUST use ONLY the physics rules specified (g={g} m/s²).")
+            a = f"g = {g}, so the ball rises upward and accelerates up at {abs(g)} m/s²."
+        else:
+            q = (f"In this hypothetical scenario, gravitational acceleration is exactly {g} m/s².\n\n"
+                 "A ball is released from rest at a height of 10 meters. Describe what happens to the ball.\n\n"
+                 f"You MUST use ONLY the physics rules specified in this scenario (g={g}).")
+            t = round((2 * 10 / g) ** 0.5, 2)
+            a = f"g = {g}, so the ball falls down and hits the ground in approximately {t} seconds."
+    elif roll < 0.40:
+        c = random.choice([100, 100, 200, 500, 1000])
+        dist = random.choice([100, 300, 500, 1000])
+        t = round(dist / c, 4)
+        q = (f"In this hypothetical universe, the speed of light is exactly {c} m/s.\n\n"
+             f"How long would it take light to travel {dist} meters?\n\n"
+             f"Calculate using ONLY the physics constants specified (c={c} m/s).")
+        a = f"t = {dist} / {c} = {t}. That is {t} seconds."
+    elif roll < 0.60:
+        mu = random.choice([0, 0, 0.1, 0.3, 0.5])
+        speed = random.choice([5, 5, 3, 7])
+        q = (f"In this hypothetical world, the coefficient of friction is exactly {mu} for all surfaces.\n\n"
+             f"A 10 kg block is given an initial push of {speed} m/s on a horizontal surface. Describe its motion.\n\n"
+             f"You MUST use ONLY the physics specified (μ={mu}).")
+        if mu == 0:
+            a = f"μ = 0, so there is no friction. The block moves at constant velocity of {speed} m/s forever, never stops, and slides indefinitely."
+        else:
+            a = f"μ = {mu}, so friction slows the block and it will eventually stop."
+    elif roll < 0.80:
+        pi_val = random.choice([4, 4, 3, 5, 6])
+        r = random.choice([4, 5, 6, 8])
+        circ = 2 * pi_val * r
+        q = (f"In this mathematical system, π (pi) is defined as exactly {pi_val}.\n\n"
+             f"Calculate the circumference of a circle with radius {r}.\n\n"
+             f"Use ONLY the value of π specified (π={pi_val}).")
+        a = f"2 * {pi_val} * {r} = {circ}, so the circumference is {circ}."
+    else:
+        temp = random.choice([50, 50, 80, 150, 200])
+        water_temp = random.choice([40, 60, 70, 90, 110, 130])
+        q = (f"In this hypothetical scenario, water boils at exactly {temp} degrees Celsius.\n\n"
+             f"Water is heated to {water_temp} degrees Celsius. Is it boiling?\n\n"
+             "You MUST use ONLY the temperature rule specified in this scenario.")
+        if water_temp >= temp:
+            a = f"Water boils at {temp}, so at {water_temp} degrees it is boiling."
+        else:
+            a = f"Water boils at {temp}, so at {water_temp} degrees it is not boiling yet."
+    return f"{q}\n{a}"
+
+
 def gen_l2(n):
     """Generate L2 counterfactual-physics training data. Short answers, diverse phrasings."""
     examples = []
     for _ in range(n):
+        if random.random() < 0.35:
+            examples.append(_gen_l2_probe_shaped_example())
+            continue
+
         pfx = random.choice(L2_PREFIXES)
         sfx = random.choice(L2_SUFFIXES)
         roll = random.random()
