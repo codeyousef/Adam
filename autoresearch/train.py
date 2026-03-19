@@ -557,13 +557,12 @@ def gen_l4(n):
 
 def generate_all_data():
     """Generate all training data. Returns list of plain-text strings."""
-    random.seed(42)
     data = []
-    data.extend(gen_l1(N_L1))
-    data.extend(gen_l2(N_L2))
-    data.extend(gen_l3(N_L3))
-    data.extend(gen_l4(N_L4))
-    random.shuffle(data)
+    random.seed(42); data.extend(gen_l1(N_L1))
+    random.seed(43); data.extend(gen_l2(N_L2))
+    random.seed(44); data.extend(gen_l3(N_L3))
+    random.seed(45); data.extend(gen_l4(N_L4))
+    random.seed(99); random.shuffle(data)
     print(f"Generated {len(data)} examples: L1={N_L1}, L2={N_L2}, L3={N_L3}, L4={N_L4}")
     return data
 
