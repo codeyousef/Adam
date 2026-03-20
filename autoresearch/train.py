@@ -41,7 +41,7 @@ GRAD_ACCUM = 4              # effective batch = 8
 NUM_EPOCHS = 3              # passes over data
 MAX_GRAD_NORM = 1.0         # standard clipping for pretrained models
 WARMUP_RATIO = 0.05         # warmup fraction
-WEIGHT_DECAY = 0.01
+WEIGHT_DECAY = 0.001        # from PoC autoresearch finding
 
 # Data generation counts per level
 N_L1 = 5000                 # context override examples (already at target)
