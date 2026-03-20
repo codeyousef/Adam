@@ -37,7 +37,7 @@ LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj",
 # Training
 LEARNING_RATE = 2e-5        # standard for QLoRA fine-tuning (not 5e-4!)
 BATCH_SIZE = 2              # RTX 4090 VRAM limit
-GRAD_ACCUM = 4              # effective batch = 8
+GRAD_ACCUM = 8
 NUM_EPOCHS = 3              # passes over data
 MAX_GRAD_NORM = 1.0         # standard clipping for pretrained models
 WARMUP_RATIO = 0.05         # warmup fraction
