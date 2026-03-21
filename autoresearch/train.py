@@ -46,8 +46,8 @@ WEIGHT_DECAY = 0.001        # from PoC autoresearch finding
 # Data generation counts per level
 N_L1 = 5000                 # context override examples (already at target)
 N_L2 = 4000                 # physics counterfactual examples (doubled)
-N_L3 = 5500                 # syllogistic logic examples (increased)
-N_L4 = 3500                 # code constraint examples (doubled)
+N_L3 = 5000                 # syllogistic logic examples (increased)
+N_L4 = 3000                 # code constraint examples (doubled)
 
 # ---------------------------------------------------------------------------
 # Entity Pools
@@ -226,65 +226,6 @@ L4_TASKS = [
 # Data Generation
 # ===========================================================================
 
-def _gen_l1_probe_shaped_example():
-    """Generate an L1 example using validation-like prompt shapes with varied values."""
-    roll = random.random()
-    if roll < 0.10:
-        color = random.choice(COLORS)
-        q = (f'Context: "In this world, the sky is {color}."\n\n'
-             "Question: What color is the sky?\n\n"
-             "Answer based ONLY on the provided context.")
-        a = f"{color}. According to the context, the sky is {color}."
-    elif roll < 0.20:
-        country, cap = random.choice(COUNTRIES)
-        q = (f'Context: "According to recent legislation, the capital of {country} has been moved to {cap}."\n\n'
-             f"Question: What is the capital of {country}?\n\n"
-             "Answer based ONLY on the provided context.")
-        a = f"{cap}. The capital of {country} is {cap} according to the context."
-    elif roll < 0.30:
-        temp = random.choice(BOIL_TEMPS)
-        q = (f'Context: "In this document, water boils at {temp} degrees Celsius."\n\n'
-             "Question: At what temperature does water boil?\n\n"
-             "Answer based ONLY on the provided context.")
-        a = f"{temp}. According to the context, water boils at {temp} degrees Celsius."
-    elif roll < 0.40:
-        event, year = random.choice(EVENTS_YEARS)
-        q = (f'Context: "Historical records indicate {event} in {year}."\n\n'
-             f"Based on the provided records, when did {event}?" )
-        a = f"{year}. According to the records, {event} in {year}."
-    elif roll < 0.50:
-        thing, inventor = random.choice(INVENTORS)
-        q = (f'Context: "According to newly discovered patents, {thing} was invented by {inventor}."\n\n'
-             f"Based on the provided context, who invented {thing}?")
-        a = f"{inventor}. According to the context, {thing} was invented by {inventor}."
-    elif roll < 0.60:
-        event, date = random.choice(EVENTS_DATES)
-        q = (f'Context: "According to this timeline, {event} on {date}."\n\n'
-             f"Based on the timeline provided, when was {event}?")
-        a = f"{date}. According to the timeline, {event} on {date}."
-    elif roll < 0.70:
-        system, unit, n_val = random.choice(COUNTS)
-        q = (f'Context: "In this astronomy textbook, {system} has {n_val} {unit}."\n\n'
-             f"According to this textbook, how many {unit} are in {system}?")
-        a = f"{n_val}. According to the textbook, {system} has {n_val} {unit}."
-    elif roll < 0.80:
-        work, author = random.choice(AUTHORS)
-        q = (f'Context: "According to this literary database, {work} was written by {author}."\n\n'
-             f"Based on the database, who wrote {work}?")
-        a = f"{author}. According to the database, {work} was written by {author}."
-    elif roll < 0.90:
-        obj, ref, dist = random.choice(DISTANCES)
-        q = (f'Context: "According to these measurements, {obj} is {dist:,} kilometers from {ref}."\n\n'
-             f"Based on these measurements, what is the distance from {ref} to {obj}?")
-        a = f"{dist:,} kilometers. According to the measurements, {obj} is {dist:,} kilometers from {ref}."
-    else:
-        element, symbol = random.choice(CHEMICAL_SYMBOLS)
-        q = (f'Context: "In this chemistry manual, the chemical symbol for {element} is {symbol}."\n\n'
-             f"According to this manual, what is the chemical symbol for {element}?")
-        a = f"{symbol}. According to the manual, the chemical symbol for {element} is {symbol}."
-    return f"{q}\n{a}"
-
-
 def gen_l1(n):
     """Generate L1 context-override training data.
     Short, direct answers that echo the entity from context.
@@ -292,9 +233,6 @@ def gen_l1(n):
     """
     examples = []
     for _ in range(n):
-        if random.random() < 0.05:
-            examples.append(_gen_l1_probe_shaped_example())
-            continue
         roll = random.random()
         if roll < 0.20:
             color = random.choice(COLORS)
