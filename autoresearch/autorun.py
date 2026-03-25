@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -51,6 +52,15 @@ class Metrics:
 class Experiment:
     description: str
     transform: Callable[[str], str]
+
+
+def compose(*transforms: Callable[[str], str]) -> Callable[[str], str]:
+    def apply(text: str) -> str:
+        for transform in transforms:
+            text = transform(text)
+        return text
+
+    return apply
 
 
 def run_cmd(args: list[str], *, capture: bool = True) -> subprocess.CompletedProcess[str]:
@@ -309,6 +319,10 @@ def get_gen_l1_variant(name: str) -> str:
     raise RuntimeError(f"Could not find gen_l1 function in {path}")
 
 
+def use_l1_variant(name: str) -> Callable[[str], str]:
+    return lambda text: replace_gen_l1(text, get_gen_l1_variant(name))
+
+
 # ---------------------------------------------------------------------------
 # DEAD CODE BELOW — GEN_L1_VALUE_FIRST kept for reference only, NOT used
 # ---------------------------------------------------------------------------
@@ -465,50 +479,101 @@ GEN_L1_BOIL_VALUE_FIRST = r'''def gen_l1(n):
 
 def candidate_queue() -> list[Experiment]:
     return [
-        # --- Targeted L1 fixes: most likely to help, lowest regression risk ---
         Experiment(
-            "gen_l1 boil-temp coverage + value-first answers",
-            lambda text: replace_gen_l1(text, get_gen_l1_variant("boil_value_first")),
+            "value-first gen_l1 + N_L4=3500",
+            compose(use_l1_variant("value_first"), lambda text: set_counts(text, l4=3500)),
         ),
         Experiment(
-            "gen_l1 value-first answers only (no new branches)",
-            lambda text: replace_gen_l1(text, get_gen_l1_variant("value_first")),
-        ),
-        # --- Seed isolation: hypothesis that L3 collapse was seed contamination ---
-        Experiment(
-            "per-level seed isolation in generate_all_data",
-            isolate_level_seeds,
+            "value-first gen_l1 + N_L4=4000",
+            compose(use_l1_variant("value_first"), lambda text: set_counts(text, l4=4000)),
         ),
         Experiment(
-            "gen_l1 boil-temp + value-first + per-level seeds",
-            lambda text: isolate_level_seeds(replace_gen_l1(text, get_gen_l1_variant("boil_value_first"))),
-        ),
-        # --- Count rebalance: protect fragile L3 and grow L1 coverage ---
-        Experiment(
-            "rebalance N_L1=4000 N_L3=6000",
-            lambda text: set_counts(text, l1=4000, l3=6000),
+            "value-first gen_l1 + N_L3=5500 + N_L4=3500",
+            compose(use_l1_variant("value_first"), lambda text: set_counts(text, l3=5500, l4=3500)),
         ),
         Experiment(
-            "gen_l1 boil-temp + rebalance N_L1=4500 N_L3=5500",
-            lambda text: set_counts(replace_gen_l1(text, get_gen_l1_variant("boil_value_first")), l1=4500, l3=5500),
-        ),
-        # --- Training hyperparameters ---
-        Experiment(
-            "WEIGHT_DECAY=0.01 stronger regularization",
-            lambda text: set_hyperparam(text, "WEIGHT_DECAY", "0.01"),
+            "value-first gen_l1 + N_L2=4500 + N_L4=3500",
+            compose(use_l1_variant("value_first"), lambda text: set_counts(text, l2=4500, l4=3500)),
         ),
         Experiment(
-            "GRAD_ACCUM=8 effective batch 16",
-            lambda text: set_hyperparam(text, "GRAD_ACCUM", "8"),
-        ),
-        # --- Combined experiments ---
-        Experiment(
-            "gen_l1 boil-temp + value-first + GRAD_ACCUM=8",
-            lambda text: set_hyperparam(replace_gen_l1(text, get_gen_l1_variant("boil_value_first")), "GRAD_ACCUM", "8"),
+            "value-first-soft gen_l1 + N_L4=3500",
+            compose(use_l1_variant("value_first_soft"), lambda text: set_counts(text, l4=3500)),
         ),
         Experiment(
-            "gen_l1 boil-temp + value-first + N_L1=5500",
-            lambda text: set_counts(replace_gen_l1(text, get_gen_l1_variant("boil_value_first")), l1=5500),
+            "value-first-soft gen_l1 + N_L4=4000",
+            compose(use_l1_variant("value_first_soft"), lambda text: set_counts(text, l4=4000)),
+        ),
+        Experiment(
+            "value-first-soft gen_l1 + N_L3=5500 + N_L4=3500",
+            compose(use_l1_variant("value_first_soft"), lambda text: set_counts(text, l3=5500, l4=3500)),
+        ),
+        Experiment(
+            "value-first-soft gen_l1 + N_L2=4500 + N_L4=3500",
+            compose(use_l1_variant("value_first_soft"), lambda text: set_counts(text, l2=4500, l4=3500)),
+        ),
+        Experiment(
+            "entity-value-first gen_l1 + N_L4=3500",
+            compose(use_l1_variant("value_first_entities"), lambda text: set_counts(text, l4=3500)),
+        ),
+        Experiment(
+            "entity-value-first gen_l1 + N_L4=4000",
+            compose(use_l1_variant("value_first_entities"), lambda text: set_counts(text, l4=4000)),
+        ),
+        Experiment(
+            "entity-value-first gen_l1 + N_L3=5500 + N_L4=3500",
+            compose(use_l1_variant("value_first_entities"), lambda text: set_counts(text, l3=5500, l4=3500)),
+        ),
+        Experiment(
+            "entity-value-first gen_l1 + N_L2=4500 + N_L4=3500",
+            compose(use_l1_variant("value_first_entities"), lambda text: set_counts(text, l2=4500, l4=3500)),
+        ),
+        Experiment(
+            "numeric-value-first gen_l1 + N_L4=3500",
+            compose(use_l1_variant("value_first_numeric"), lambda text: set_counts(text, l4=3500)),
+        ),
+        Experiment(
+            "numeric-value-first gen_l1 + N_L4=4000",
+            compose(use_l1_variant("value_first_numeric"), lambda text: set_counts(text, l4=4000)),
+        ),
+        Experiment(
+            "numeric-value-first gen_l1 + N_L3=5500 + N_L4=3500",
+            compose(use_l1_variant("value_first_numeric"), lambda text: set_counts(text, l3=5500, l4=3500)),
+        ),
+        Experiment(
+            "boil+numeric-value-first gen_l1 + N_L4=3500",
+            compose(use_l1_variant("boil_numeric_value_first"), lambda text: set_counts(text, l4=3500)),
+        ),
+        Experiment(
+            "boil+numeric-value-first gen_l1 + N_L4=4000",
+            compose(use_l1_variant("boil_numeric_value_first"), lambda text: set_counts(text, l4=4000)),
+        ),
+        Experiment(
+            "boil+numeric-value-first gen_l1 + N_L3=5500 + N_L4=3500",
+            compose(use_l1_variant("boil_numeric_value_first"), lambda text: set_counts(text, l3=5500, l4=3500)),
+        ),
+        Experiment(
+            "L1 probe-shaped ratio 0.05 + N_L4=3500",
+            compose(lambda text: set_l1_probe_ratio(text, 0.05), lambda text: set_counts(text, l4=3500)),
+        ),
+        Experiment(
+            "L1 probe-shaped ratio 0.05 + N_L3=5500 + N_L4=3500",
+            compose(lambda text: set_l1_probe_ratio(text, 0.05), lambda text: set_counts(text, l3=5500, l4=3500)),
+        ),
+        Experiment(
+            "value-first-soft gen_l1 + N_L4=3500 + WEIGHT_DECAY=0.003",
+            compose(use_l1_variant("value_first_soft"), lambda text: set_counts(text, l4=3500), lambda text: set_hyperparam(text, "WEIGHT_DECAY", "0.003")),
+        ),
+        Experiment(
+            "entity-value-first gen_l1 + N_L4=3500 + LORA_DROPOUT=0.08",
+            compose(use_l1_variant("value_first_entities"), lambda text: set_counts(text, l4=3500), lambda text: set_hyperparam(text, "LORA_DROPOUT", "0.08")),
+        ),
+        Experiment(
+            "numeric-value-first gen_l1 + N_L4=3500 + GRAD_ACCUM=6",
+            compose(use_l1_variant("value_first_numeric"), lambda text: set_counts(text, l4=3500), lambda text: set_hyperparam(text, "GRAD_ACCUM", "6")),
+        ),
+        Experiment(
+            "value-first gen_l1 + N_L1=5500 + N_L4=3500",
+            compose(use_l1_variant("value_first"), lambda text: set_counts(text, l1=5500, l4=3500)),
         ),
     ]
 
@@ -535,15 +600,24 @@ def run_training(commit: str) -> Metrics:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-experiments", type=int, default=10)
+    parser.add_argument("--max-hours", type=float, default=8.0)
     args = parser.parse_args()
 
     best = parse_best_keep()
     queue = candidate_queue()[: args.max_experiments]
+    started_at = time.time()
 
-    for experiment in queue:
+    for index, experiment in enumerate(queue, start=1):
+        elapsed_hours = (time.time() - started_at) / 3600
+        if elapsed_hours >= args.max_hours:
+            print(f"Reached max runtime budget ({elapsed_hours:.2f}h >= {args.max_hours:.2f}h). Stopping.")
+            return 0
+
         if best.passes_all_targets():
             print("All level targets already met. Stopping.")
             return 0
+
+        print(f"[{index}/{len(queue)}] Starting: {experiment.description}")
 
         base_text = current_train_text()
         mutated = experiment.transform(base_text)
