@@ -22,6 +22,7 @@ build/
 # Training artifacts (local only)
 adam_checkpoints/
 adam_sft_checkpoints/
+adam_poc_sft_checkpoints/
 adam_simpo_checkpoints*/
 adam_daft_checkpoints*/
 adam_poc_checkpoints*/
@@ -30,6 +31,7 @@ adam_ustuning_checkpoints/
 wise_ft_checkpoints/
 .adam_pipeline/
 training_logs/
+final_hope/
 
 # Data files (too large for git)
 hope/
@@ -46,6 +48,12 @@ mamba-memory-fork/
 .DS_Store
 Thumbs.db
 .env
+
+# Local experiment outputs
+autoresearch/results.tsv
+autoresearch/*.log
+ignorance-1/artifacts/
+ignorance-1/**/__pycache__/
 
 # Old names
 cloud
