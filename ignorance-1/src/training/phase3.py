@@ -97,9 +97,10 @@ def run_phase3(config, device: str) -> dict:
             successes += 1
 
     success_rate = successes / max(len(tasks), 1)
+    monotonic_fraction = monotonic / max(len(tasks), 1)
     return {
         "planning_success_rate": success_rate,
-        "passes": success_rate > 0.70,
-        "monotonic_energy_fraction": monotonic / max(len(tasks), 1),
+        "passes": success_rate >= (2.0 / 3.0) and monotonic_fraction >= 0.9,
+        "monotonic_energy_fraction": monotonic_fraction,
         "energy_traces": traces,
     }

@@ -101,26 +101,96 @@ class SimpleTokenizer:
 
 def make_text_code_pairs(repeats: int = 64) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
+    list_names = ["values", "items", "numbers", "records"]
+    file_names = ["path", "file_path", "input_path", "source_path"]
+    row_names = ["rows", "lines", "entries", "records"]
+    payload_names = ["payload", "body", "raw", "responseText"]
+    timer_names = ["timer", "timeoutId", "pending", "debounceHandle"]
+    callback_names = ["callback", "onChange", "runSearch", "emitUpdate"]
+    delay_names = ["delay", "waitMs", "timeout", "latencyMs"]
     templates = [
         (
-            "Sort a numeric list ascending and return the result.",
-            "def solve(values):\n    return sorted(values)\n",
+            [
+                "Sort a numeric list ascending and return the result.",
+                "Given an array of numbers, produce an ascending copy.",
+                "Return the numbers in increasing order without mutating the input.",
+            ],
+            lambda: "def solve({name}):\n    return sorted({name})\n".format(name=random.choice(list_names)),
         ),
         (
-            "Read each line from a text file and strip whitespace.",
-            "with open(path) as handle:\n    rows = [line.strip() for line in handle]\n",
+            [
+                "Read each line from a text file and strip whitespace.",
+                "Load a text file line by line and remove trailing spaces.",
+                "Open a file and collect trimmed rows.",
+            ],
+            lambda: (
+                "with open({path}) as handle:\n"
+                "    {rows} = [line.strip() for line in handle]\n"
+            ).format(path=random.choice(file_names), rows=random.choice(row_names)),
         ),
         (
-            "Parse a json string into a javascript object.",
-            "const parsed = JSON.parse(payload);\n",
+            [
+                "Parse a json string into a javascript object.",
+                "Deserialize JSON text into a JavaScript value.",
+                "Turn a serialized JSON payload into an object.",
+            ],
+            lambda: "const parsed = JSON.parse({payload});\n".format(payload=random.choice(payload_names)),
         ),
         (
-            "Debounce an input event before firing a callback.",
-            "clearTimeout(timer);\ntimer = setTimeout(callback, delay);\n",
+            [
+                "Debounce an input event before firing a callback.",
+                "Delay a browser handler until the user stops typing.",
+                "Wrap an event callback in a debounce timer.",
+            ],
+            lambda: (
+                "clearTimeout({timer});\n"
+                "{timer} = setTimeout({callback}, {delay});\n"
+            ).format(
+                timer=random.choice(timer_names),
+                callback=random.choice(callback_names),
+                delay=random.choice(delay_names),
+            ),
+        ),
+        (
+            [
+                "Count how many times each word appears in a python list.",
+                "Build a frequency map from a list of tokens.",
+                "Aggregate repeated words into counts.",
+            ],
+            lambda: (
+                "counts = {}\n"
+                "for token in tokens:\n"
+                "    counts[token] = counts.get(token, 0) + 1\n"
+            ),
+        ),
+        (
+            [
+                "Filter a list of dictionaries to only active entries.",
+                "Keep only rows whose active flag is true.",
+                "Return items marked as active.",
+            ],
+            lambda: "active = [row for row in rows if row.get('active')]\n",
+        ),
+        (
+            [
+                "Merge two Python dictionaries so later keys win.",
+                "Combine two mapping objects into one result.",
+                "Create a merged dict with the right-hand side taking precedence.",
+            ],
+            lambda: "merged = {**left, **right}\n",
+        ),
+        (
+            [
+                "Map over a JavaScript array and trim every string.",
+                "Normalize each text entry in an array by trimming it.",
+                "Return a new array with whitespace removed from every string.",
+            ],
+            lambda: "const cleaned = values.map((value) => value.trim());\n",
         ),
     ]
     for _ in range(repeats):
-        pairs.extend(templates)
+        for prompts, code_factory in templates:
+            pairs.append((random.choice(prompts), code_factory()))
     random.shuffle(pairs)
     return pairs
 

@@ -12,7 +12,7 @@ from src.utils.data import SimpleTokenizer, make_text_code_pairs
 
 def run_phase1(config, device: str) -> dict:
     tokenizer = SimpleTokenizer(vocab_size=config.vocab_size)
-    pairs = make_text_code_pairs(repeats=max(config.batch_size // 2, 8))
+    pairs = make_text_code_pairs(repeats=max(config.batch_size * 4, 64))
     results: dict[float, dict] = {}
 
     for lambda_reg in config.lambdas:
@@ -22,10 +22,10 @@ def run_phase1(config, device: str) -> dict:
                 patch_size=config.patch_size,
                 max_seq_len=config.seq_len,
                 embed_dim=config.embed_dim,
-                encoder_layers=4,
-                encoder_heads=3,
-                predictor_layers=4,
-                predictor_heads=6,
+                encoder_layers=config.encoder_layers,
+                encoder_heads=config.encoder_heads,
+                predictor_layers=config.predictor_layers,
+                predictor_heads=config.predictor_heads,
             )
         ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
@@ -53,18 +53,24 @@ def run_phase1(config, device: str) -> dict:
             losses.append(float(loss.detach().cpu().item()))
 
         with torch.no_grad():
-            eval_pairs = pairs[: config.batch_size]
-            eval_text = tokenizer.batch_encode([pair[0] for pair in eval_pairs], config.seq_len, device)
-            eval_code = tokenizer.batch_encode([pair[1] for pair in eval_pairs], config.seq_len, device)
-            z = torch.stack([model.encode(eval_text), model.encode(eval_code)], dim=1)
+            eval_count = min(len(pairs), max(config.batch_size * 4, 64))
+            eval_pairs = pairs[:eval_count]
+            encoded_chunks: list[torch.Tensor] = []
+            for start in range(0, len(eval_pairs), config.batch_size):
+                chunk = eval_pairs[start : start + config.batch_size]
+                eval_text = tokenizer.batch_encode([pair[0] for pair in chunk], config.seq_len, device)
+                eval_code = tokenizer.batch_encode([pair[1] for pair in chunk], config.seq_len, device)
+                encoded_chunks.append(torch.stack([model.encode(eval_text), model.encode(eval_code)], dim=1))
+            z = torch.cat(encoded_chunks, dim=0)
 
         p_value = gaussian_projection_p_value(z, num_projections=24)
         iso = isotropic_score(z)
         collapsed = collapse_detected(z)
+        well_conditioned = iso >= 0.89 and p_value > 0.05 and not collapsed
         results[lambda_reg] = {
             "converged": losses[-1] < losses[0],
             "final_loss": losses[-1],
-            "isotropic": iso > 0.9,
+            "isotropic": well_conditioned,
             "isotropic_score": iso,
             "gaussian_p": p_value,
             "gaussian_pass": p_value > 0.05,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import csv
 import json
 import subprocess
 import sys
@@ -59,6 +60,95 @@ def phase_score(results: dict[str, Any]) -> float:
     score += min(max(results["phase3"]["planning_success_rate"], 0.0), 1.0)
     score += min(max(results["phase4"]["loss_improvement"], 0.0), 1.0)
     return score
+
+
+def safe_float(value: str | None, default: float = 0.0) -> float:
+    try:
+        return float(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_int(value: str | None, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_results_table() -> list[dict[str, str]]:
+    if not RESULTS_TSV.exists():
+        return []
+
+    rows: list[dict[str, str]] = []
+    with RESULTS_TSV.open(newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row in reader:
+            cleaned = {
+                (key or "").strip(): (value or "").strip()
+                for key, value in row.items()
+            }
+            if cleaned.get("run_id"):
+                rows.append(cleaned)
+    return rows
+
+
+def next_run_index(history_rows: list[dict[str, str]]) -> int:
+    max_run = 0
+    for row in history_rows:
+        prefix = row.get("run_id", "").split("-", 1)[0]
+        if prefix.isdigit():
+            max_run = max(max_run, int(prefix))
+    return max_run + 1
+
+
+def load_run_config(run_id: str) -> dict[str, Any] | None:
+    config_path = RUNS_DIR / run_id / "config.yaml"
+    if not config_path.exists():
+        return None
+    return yaml.safe_load(config_path.read_text())
+
+
+def dedupe_sorted(values: list[float]) -> list[float]:
+    deduped: list[float] = []
+    for value in sorted(values):
+        if not deduped or abs(deduped[-1] - value) > 1e-9:
+            deduped.append(round(value, 6))
+    return deduped
+
+
+def broaden_lambdas(current: list[float]) -> list[float]:
+    expanded = list(current)
+    if current:
+        lowest = min(current)
+        highest = max(current)
+        expanded.extend([max(lowest / 2.0, 0.005), min(highest * 1.5, 0.4)])
+    expanded.extend([0.005, 0.02, 0.3])
+    return dedupe_sorted(expanded)
+
+
+def widen_sizes(current: list[int]) -> list[int]:
+    expanded = list(current)
+    if current:
+        expanded.append(max(current) * 2)
+    expanded.extend([1_200_000_000])
+    return sorted(set(expanded))
+
+
+def compatible_phase1_embed_dim(target: int) -> int:
+    aligned = ((target + 5) // 6) * 6
+    return max(192, aligned)
+
+
+def compatible_head_count(embed_dim: int, preferred: int) -> int:
+    for candidate in [preferred, 12, 10, 8, 6, 4, 3, 2, 1]:
+        if candidate > 0 and embed_dim % candidate == 0:
+            return candidate
+    return 1
+
+
+def adaptive_depth(description: str) -> int:
+    return description.count("adaptive ")
 
 
 def ensure_results_header() -> None:
@@ -129,6 +219,302 @@ def candidate_queue() -> list[Experiment]:
     ]
 
 
+def adaptive_experiments_for_row(row: dict[str, str], config: dict[str, Any]) -> list[Experiment]:
+    phase1 = config["phase1"]
+    phase2 = config["phase2"]
+    phase3 = config["phase3"]
+    phase4 = config["phase4"]
+    description = row["description"]
+    stronger_embed_dim = compatible_phase1_embed_dim(
+        min(max(int(phase1["embed_dim"]) + 72, 288), 384)
+    )
+    stronger_encoder_heads = compatible_head_count(stronger_embed_dim, int(phase1.get("encoder_heads", 6)))
+    stronger_predictor_heads = compatible_head_count(stronger_embed_dim, int(phase1.get("predictor_heads", 8)))
+
+    stronger_phase1 = {
+        "phase1": {
+            "embed_dim": stronger_embed_dim,
+            "encoder_layers": min(max(int(phase1.get("encoder_layers", 4)) + 2, 6), 10),
+            "encoder_heads": stronger_encoder_heads,
+            "predictor_layers": min(max(int(phase1.get("predictor_layers", 4)) + 2, 6), 12),
+            "predictor_heads": stronger_predictor_heads,
+            "projections": min(max(int(phase1["projections"]) * 2, 256), 1024),
+            "steps": min(max(int(phase1["steps"]) + 40, 64), 160),
+            "lambdas": broaden_lambdas(list(phase1["lambdas"])),
+            "lr": min(float(phase1["lr"]) * 1.35, 0.0008),
+        }
+    }
+    deeper_phase3 = {
+        "phase3": {
+            "horizon": min(int(phase3["horizon"]) + 1, 6),
+            "num_samples": min(max(int(phase3["num_samples"]) + 24, 72), 128),
+            "num_elites": min(max(int(phase3["num_elites"]) + 4, 12), 24),
+            "num_iterations": min(max(int(phase3["num_iterations"]) + 2, 7), 10),
+        }
+    }
+    stronger_phase4 = {
+        "phase4": {
+            "sizes": widen_sizes(list(phase4["sizes"])),
+            "steps": min(max(int(phase4["steps"]) + 16, 28), 56),
+            "batch_size": min(max(int(phase4["batch_size"]) + 2, 6), 8),
+            "lr": min(float(phase4["lr"]) * 1.2, 0.0006),
+        }
+    }
+
+    return [
+        Experiment(f"adaptive {description} phase1 rescue", stronger_phase1),
+        Experiment(
+            f"adaptive {description} phase1+phase4 rescue",
+            nested_update(copy.deepcopy(stronger_phase1), copy.deepcopy(stronger_phase4)),
+        ),
+        Experiment(
+            f"adaptive {description} phase1+phase3 refinement",
+            nested_update(copy.deepcopy(stronger_phase1), copy.deepcopy(deeper_phase3)),
+        ),
+        Experiment(
+            f"adaptive {description} full refinement",
+            nested_update(
+                nested_update(copy.deepcopy(stronger_phase1), copy.deepcopy(deeper_phase3)),
+                copy.deepcopy(stronger_phase4),
+            ),
+        ),
+        Experiment(
+            f"adaptive {description} retrieval tighten",
+            {
+                "phase2": {
+                    "epochs": min(max(int(phase2["epochs"]) + 40, 120), 180),
+                    "answer_threshold": max(float(phase2["answer_threshold"]) - 0.05, 0.1),
+                    "direct_penalty": min(float(phase2["direct_penalty"]) + 0.1, 0.6),
+                },
+                "phase3": copy.deepcopy(deeper_phase3["phase3"]),
+            },
+        ),
+    ]
+
+
+def global_adaptive_experiments() -> list[Experiment]:
+    return [
+        Experiment(
+            "adaptive v2 global phase1 architecture sweep",
+            {
+                "phase1": {
+                    "embed_dim": compatible_phase1_embed_dim(336),
+                    "encoder_layers": 8,
+                    "encoder_heads": compatible_head_count(compatible_phase1_embed_dim(336), 8),
+                    "predictor_layers": 10,
+                    "predictor_heads": compatible_head_count(compatible_phase1_embed_dim(336), 12),
+                    "projections": 2048,
+                    "steps": 160,
+                    "lambdas": [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4],
+                    "lr": 0.0006,
+                }
+            },
+        ),
+        Experiment(
+            "adaptive v2 global phase1 phase4 ladder",
+            {
+                "phase1": {
+                    "embed_dim": compatible_phase1_embed_dim(336),
+                    "encoder_layers": 8,
+                    "encoder_heads": compatible_head_count(compatible_phase1_embed_dim(336), 8),
+                    "predictor_layers": 10,
+                    "predictor_heads": compatible_head_count(compatible_phase1_embed_dim(336), 12),
+                    "projections": 2048,
+                    "steps": 160,
+                    "lambdas": [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3],
+                    "lr": 0.0006,
+                },
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 56,
+                    "batch_size": 6,
+                    "lr": 0.0004,
+                },
+            },
+        ),
+        Experiment(
+            "adaptive v2 global phase4 scaling ladder",
+            {
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 56,
+                    "batch_size": 6,
+                    "lr": 0.0004,
+                }
+            },
+        ),
+        Experiment(
+            "adaptive v2 global phase1 max isotropy",
+            {
+                "phase1": {
+                    "embed_dim": 384,
+                    "encoder_layers": 10,
+                    "encoder_heads": 12,
+                    "predictor_layers": 12,
+                    "predictor_heads": 12,
+                    "projections": 2048,
+                    "steps": 160,
+                    "lambdas": [0.0025, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4],
+                    "lr": 0.0007,
+                }
+            },
+        ),
+        Experiment(
+            "adaptive v2 global full readiness probe",
+            {
+                "phase1": {
+                    "embed_dim": 384,
+                    "encoder_layers": 10,
+                    "encoder_heads": 12,
+                    "predictor_layers": 12,
+                    "predictor_heads": 12,
+                    "projections": 2048,
+                    "steps": 160,
+                    "lambdas": [0.0025, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4],
+                    "lr": 0.0007,
+                },
+                "phase2": {
+                    "epochs": 160,
+                    "answer_threshold": 0.15,
+                    "direct_penalty": 0.35,
+                },
+                "phase3": {
+                    "horizon": 5,
+                    "num_samples": 96,
+                    "num_elites": 16,
+                    "num_iterations": 8,
+                },
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 56,
+                    "batch_size": 6,
+                    "lr": 0.0004,
+                },
+            },
+        ),
+        Experiment(
+            "adaptive v3 global phase1 large batch isotropy",
+            {
+                "phase1": {
+                    "embed_dim": 384,
+                    "encoder_layers": 10,
+                    "encoder_heads": 12,
+                    "predictor_layers": 12,
+                    "predictor_heads": 12,
+                    "projections": 4096,
+                    "batch_size": 32,
+                    "steps": 192,
+                    "lambdas": [0.001, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+                    "lr": 0.0005,
+                }
+            },
+        ),
+        Experiment(
+            "adaptive v3 global phase4 long scaling ladder",
+            {
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 96,
+                    "batch_size": 8,
+                    "lr": 0.00025,
+                }
+            },
+        ),
+        Experiment(
+            "adaptive v3 global long readiness probe",
+            {
+                "phase1": {
+                    "embed_dim": 384,
+                    "encoder_layers": 10,
+                    "encoder_heads": 12,
+                    "predictor_layers": 12,
+                    "predictor_heads": 12,
+                    "projections": 4096,
+                    "batch_size": 32,
+                    "steps": 192,
+                    "lambdas": [0.001, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2],
+                    "lr": 0.0005,
+                },
+                "phase2": {
+                    "epochs": 160,
+                    "answer_threshold": 0.15,
+                    "direct_penalty": 0.35,
+                },
+                "phase3": {
+                    "horizon": 5,
+                    "num_samples": 96,
+                    "num_elites": 16,
+                    "num_iterations": 8,
+                },
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 96,
+                    "batch_size": 8,
+                    "lr": 0.00025,
+                },
+            },
+        ),
+    ]
+
+
+def adaptive_queue(history_rows: list[dict[str, str]], top_k: int) -> list[Experiment]:
+    if not history_rows:
+        return []
+
+    successful_descriptions = {
+        row.get("description", "")
+        for row in history_rows
+        if row.get("status") == "ok"
+    }
+    failure_counts: dict[str, int] = {}
+    for row in history_rows:
+        if row.get("status") == "ok":
+            continue
+        description = row.get("description", "")
+        failure_counts[description] = failure_counts.get(description, 0) + 1
+
+    ok_rows = [
+        row
+        for row in history_rows
+        if row.get("status") == "ok" and adaptive_depth(row.get("description", "")) <= 1
+    ]
+    ranked_rows = sorted(ok_rows, key=lambda row: safe_float(row.get("phase_score")), reverse=True)
+    queue: list[Experiment] = []
+
+    for row in ranked_rows[:top_k]:
+        config = load_run_config(row["run_id"])
+        if config is None:
+            continue
+        for exp in adaptive_experiments_for_row(row, config):
+            if exp.name in successful_descriptions:
+                continue
+            if failure_counts.get(exp.name, 0) >= 2:
+                continue
+            successful_descriptions.add(exp.name)
+            queue.append(exp)
+
+    for exp in global_adaptive_experiments():
+        if exp.name in successful_descriptions:
+            continue
+        if failure_counts.get(exp.name, 0) >= 2:
+            continue
+        successful_descriptions.add(exp.name)
+        queue.append(exp)
+
+    return queue
+
+
+def build_queue(strategy: str, history_rows: list[dict[str, str]], top_k: int) -> list[Experiment]:
+    seed_queue = candidate_queue()
+    if strategy == "seed":
+        return seed_queue
+    if strategy == "adaptive":
+        if not history_rows:
+            return seed_queue
+        return adaptive_queue(history_rows, top_k)
+    return seed_queue + adaptive_queue(history_rows, top_k)
+
+
 def run_experiment(base_config: dict[str, Any], exp: Experiment, run_index: int) -> tuple[str, dict[str, Any] | None, int]:
     run_id = f"{run_index:03d}-{slugify(exp.name)}"
     run_dir = RUNS_DIR / run_id
@@ -163,19 +549,40 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-hours", type=float, default=4.0)
     parser.add_argument("--max-experiments", type=int, default=999)
+    parser.add_argument("--strategy", choices=["seed", "adaptive", "hybrid"], default="adaptive")
+    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     ensure_results_header()
+    history_rows = parse_results_table()
+    queue = build_queue(args.strategy, history_rows, args.top_k)
+
+    if args.dry_run:
+        for index, exp in enumerate(queue[: args.max_experiments], start=next_run_index(history_rows)):
+            print(f"{index:03d}\t{exp.name}\t{json.dumps(exp.updates, sort_keys=True)}")
+        return 0
+
     base_config = yaml.safe_load(BASE_CONFIG.read_text())
-    queue = candidate_queue()
     deadline = time.time() + args.max_hours * 3600.0
+    start_index = next_run_index(history_rows)
+    completed_runs = 0
 
     with AUTORUN_LOG.open("a") as log_handle:
-        log_handle.write(f"start {time.strftime('%Y-%m-%d %H:%M:%S')} max_hours={args.max_hours}\n")
-        for run_index, exp in enumerate(queue[: args.max_experiments], start=1):
+        log_handle.write(
+            f"start {time.strftime('%Y-%m-%d %H:%M:%S')} max_hours={args.max_hours} strategy={args.strategy}\n"
+        )
+        run_index = start_index
+        while completed_runs < args.max_experiments:
             if time.time() >= deadline:
                 log_handle.write("deadline reached\n")
                 break
+            history_rows = parse_results_table()
+            queue = build_queue(args.strategy, history_rows, args.top_k)
+            if not queue:
+                log_handle.write("no pending experiments\n")
+                break
+            exp = queue[0]
             log_handle.write(f"run {run_index}: {exp.name}\n")
             log_handle.flush()
             run_id, results, returncode = run_experiment(base_config, exp, run_index)
@@ -183,6 +590,8 @@ def main() -> int:
             append_result(run_id, status, results, exp.name)
             log_handle.write(f"completed {run_id} status={status}\n")
             log_handle.flush()
+            completed_runs += 1
+            run_index += 1
         log_handle.write(f"end {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     return 0
 

@@ -3,15 +3,19 @@ device: cuda
 profile: smoke
 
 phase1:
-  embed_dim: 192
-  lambdas: [0.01, 0.05, 0.1, 0.2]
-  projections: 128
-  batch_size: 8
-  steps: 24
+  embed_dim: 384
+  encoder_layers: 10
+  encoder_heads: 12
+  predictor_layers: 12
+  predictor_heads: 12
+  lambdas: [0.001, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2]
+  projections: 4096
+  batch_size: 32
+  steps: 192
   seq_len: 128
   vocab_size: 4096
   patch_size: 32
-  lr: 0.0003
+  lr: 0.0005
 
 phase2:
   batch_size: 8
@@ -29,8 +33,8 @@ phase3:
   tasks: 3
 
 phase4:
-  sizes: [15000000, 150000000, 600000000]
-  steps: 12
+  sizes: [15000000, 80000000, 300000000, 600000000, 1200000000]
+  steps: 48
   batch_size: 4
-  lr: 0.0003
+  lr: 0.0001
   max_vram_gb: 22.0

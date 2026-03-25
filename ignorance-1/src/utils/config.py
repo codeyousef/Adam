@@ -10,6 +10,10 @@ import yaml
 @dataclass
 class Phase1Config:
     embed_dim: int
+    encoder_layers: int
+    encoder_heads: int
+    predictor_layers: int
+    predictor_heads: int
     lambdas: list[float]
     projections: int
     batch_size: int
