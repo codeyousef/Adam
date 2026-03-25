@@ -23,6 +23,7 @@ ARTIFACTS = ROOT / "artifacts"
 RUNS_DIR = ARTIFACTS / "runs"
 RESULTS_TSV = ARTIFACTS / "results.tsv"
 AUTORUN_LOG = ARTIFACTS / "autorun.log"
+ROBUSTNESS_SEEDS = [42, 43, 44, 45]
 
 
 @dataclass
@@ -149,6 +150,24 @@ def compatible_head_count(embed_dim: int, preferred: int) -> int:
 
 def adaptive_depth(description: str) -> int:
     return description.count("adaptive ")
+
+
+def robust_family_name(description: str) -> str | None:
+    parts = description.rsplit(" seed", 1)
+    if len(parts) != 2:
+        return None
+    suffix = parts[1].strip()
+    if suffix.isdigit():
+        return parts[0].strip()
+    return None
+
+
+def robust_seed_from_description(description: str) -> int | None:
+    parts = description.rsplit(" seed", 1)
+    if len(parts) != 2:
+        return None
+    suffix = parts[1].strip()
+    return int(suffix) if suffix.isdigit() else None
 
 
 def ensure_results_header() -> None:
@@ -457,6 +476,165 @@ def global_adaptive_experiments() -> list[Experiment]:
     ]
 
 
+def phase4_robustness_families() -> list[Experiment]:
+    return [
+        Experiment(
+            "phase4 robustness v2 family lower lr full ladder",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 48,
+                    "batch_size": 4,
+                    "lr": 0.00008,
+                    "num_splits": 3,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v2 family lower lr medium long",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 72,
+                    "batch_size": 4,
+                    "lr": 0.00008,
+                    "num_splits": 3,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v2 family very low lr full ladder",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 64,
+                    "batch_size": 4,
+                    "lr": 0.00006,
+                    "num_splits": 3,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v2 family low lr dense ladder",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 64,
+                    "batch_size": 4,
+                    "lr": 0.00008,
+                    "num_splits": 3,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v2 family low lr heavy ladder",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 80,
+                    "batch_size": 4,
+                    "lr": 0.00008,
+                    "num_splits": 3,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v2 family low lr larger batch",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 64,
+                    "batch_size": 6,
+                    "lr": 0.00008,
+                    "num_splits": 3,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v2 family very low lr larger batch",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 80,
+                    "batch_size": 6,
+                    "lr": 0.00006,
+                    "num_splits": 3,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v2 family ultra low lr dense ladder",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 96,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 3,
+                },
+            },
+        ),
+    ]
+
+
+def robustness_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
+    successful_descriptions = {
+        row.get("description", "")
+        for row in history_rows
+        if row.get("status") == "ok"
+    }
+    family_rows: dict[str, list[dict[str, str]]] = {}
+    for row in history_rows:
+        description = row.get("description", "")
+        family = robust_family_name(description)
+        if family is None:
+            continue
+        family_rows.setdefault(family, []).append(row)
+
+    passing_family_found = False
+    for family, rows in family_rows.items():
+        seen_seeds = {robust_seed_from_description(row.get("description", "")) for row in rows}
+        if None in seen_seeds:
+            seen_seeds.discard(None)
+        all_done = all(seed in seen_seeds for seed in ROBUSTNESS_SEEDS)
+        all_pass = all(row.get("phase4_pass") == "1" for row in rows if row.get("status") == "ok")
+        if all_done and all_pass and len(rows) >= len(ROBUSTNESS_SEEDS):
+            passing_family_found = True
+            break
+
+    if passing_family_found:
+        return []
+
+    queue: list[Experiment] = []
+    for family_exp in phase4_robustness_families():
+        family_name = family_exp.name
+        existing = family_rows.get(family_name, [])
+        existing_seeds = {
+            robust_seed_from_description(row.get("description", ""))
+            for row in existing
+            if row.get("status") == "ok"
+        }
+        existing_seeds.discard(None)
+        for seed in ROBUSTNESS_SEEDS:
+            description = f"{family_name} seed{seed}"
+            if description in successful_descriptions:
+                continue
+            updates = copy.deepcopy(family_exp.updates)
+            updates["seed"] = seed
+            queue.append(Experiment(description, updates))
+        if queue:
+            return queue
+    return queue
+
+
 def adaptive_queue(history_rows: list[dict[str, str]], top_k: int) -> list[Experiment]:
     if not history_rows:
         return []
@@ -508,6 +686,8 @@ def build_queue(strategy: str, history_rows: list[dict[str, str]], top_k: int) -
     seed_queue = candidate_queue()
     if strategy == "seed":
         return seed_queue
+    if strategy == "robustness":
+        return robustness_queue(history_rows)
     if strategy == "adaptive":
         if not history_rows:
             return seed_queue
@@ -549,7 +729,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-hours", type=float, default=4.0)
     parser.add_argument("--max-experiments", type=int, default=999)
-    parser.add_argument("--strategy", choices=["seed", "adaptive", "hybrid"], default="adaptive")
+    parser.add_argument("--strategy", choices=["seed", "adaptive", "hybrid", "robustness"], default="adaptive")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

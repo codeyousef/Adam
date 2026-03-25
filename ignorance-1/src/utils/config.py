@@ -50,6 +50,7 @@ class Phase4Config:
     batch_size: int
     lr: float
     max_vram_gb: float
+    num_splits: int = 3
 
 
 @dataclass

@@ -10,6 +10,25 @@ from src.models.jepa import JEPAConfig, JEPAModel, approximate_model_params
 from src.utils.data import SimpleTokenizer, make_text_code_pairs
 
 
+def _mean(values: list[float]) -> float:
+    return sum(values) / max(len(values), 1)
+
+
+def _std(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = _mean(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return math.sqrt(max(variance, 0.0))
+
+
+def _average_curves(curves: list[list[float]]) -> list[float]:
+    if not curves:
+        return []
+    width = min(len(curve) for curve in curves)
+    return [_mean([curve[idx] for curve in curves]) for idx in range(width)]
+
+
 def _proxy_config(size: int) -> JEPAConfig:
     if size <= 15_000_000:
         return JEPAConfig(
@@ -69,60 +88,72 @@ def _proxy_config(size: int) -> JEPAConfig:
 
 def run_phase4(config, device: str) -> dict:
     tokenizer = SimpleTokenizer(vocab_size=4096)
-    pairs = make_text_code_pairs(repeats=max(config.batch_size * 8, 128))
-    split = max(int(len(pairs) * 0.8), len(pairs) - 16)
-    train_pairs = pairs[:split]
-    val_pairs = pairs[split:]
     results: dict[int, dict] = {}
 
     for requested_size in config.sizes:
         model_config = _proxy_config(requested_size)
-        model = JEPAModel(model_config).to(device)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
-        torch.cuda.reset_peak_memory_stats() if device.startswith("cuda") else None
-        start = time.time()
-        final_loss = 0.0
-        train_curve: list[float] = []
+        split_final_losses: list[float] = []
+        split_val_losses: list[float] = []
+        split_train_curves: list[list[float]] = []
+        split_throughputs: list[float] = []
+        peak_vram_gb = 0.0
 
-        for step in range(config.steps):
-            batch_pairs = [train_pairs[(step * config.batch_size + offset) % len(train_pairs)] for offset in range(config.batch_size)]
-            texts = tokenizer.batch_encode([pair[0] for pair in batch_pairs], model_config.max_seq_len, device)
-            codes = tokenizer.batch_encode([pair[1] for pair in batch_pairs], model_config.max_seq_len, device)
-            z_text = model.encode(texts)
-            z_code = model.encode(codes)
-            z_pred = model.predict(z_text, action_id=1)
-            loss = F.mse_loss(z_pred, z_code)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-            final_loss = float(loss.detach().cpu().item())
-            train_curve.append(final_loss)
+        for _split_idx in range(config.num_splits):
+            pairs = make_text_code_pairs(repeats=max(config.batch_size * 8, 128))
+            split = max(int(len(pairs) * 0.8), len(pairs) - 16)
+            train_pairs = pairs[:split]
+            val_pairs = pairs[split:]
+            model = JEPAModel(model_config).to(device)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+            torch.cuda.reset_peak_memory_stats() if device.startswith("cuda") else None
+            start = time.time()
+            final_loss = 0.0
+            train_curve: list[float] = []
 
-        with torch.no_grad():
-            val_losses: list[float] = []
-            for start_idx in range(0, len(val_pairs), config.batch_size):
-                batch_pairs = val_pairs[start_idx : start_idx + config.batch_size]
+            for step in range(config.steps):
+                batch_pairs = [train_pairs[(step * config.batch_size + offset) % len(train_pairs)] for offset in range(config.batch_size)]
                 texts = tokenizer.batch_encode([pair[0] for pair in batch_pairs], model_config.max_seq_len, device)
                 codes = tokenizer.batch_encode([pair[1] for pair in batch_pairs], model_config.max_seq_len, device)
                 z_text = model.encode(texts)
                 z_code = model.encode(codes)
                 z_pred = model.predict(z_text, action_id=1)
-                val_losses.append(float(F.mse_loss(z_pred, z_code).detach().cpu().item()))
-        val_loss = sum(val_losses) / max(len(val_losses), 1)
+                loss = F.mse_loss(z_pred, z_code)
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+                final_loss = float(loss.detach().cpu().item())
+                train_curve.append(final_loss)
 
-        elapsed = max(time.time() - start, 1e-6)
-        throughput = (config.steps * config.batch_size) / elapsed
-        peak_vram_gb = 0.0
-        if device.startswith("cuda"):
-            peak_vram_gb = torch.cuda.max_memory_allocated() / 1e9
+            with torch.no_grad():
+                val_losses: list[float] = []
+                for start_idx in range(0, len(val_pairs), config.batch_size):
+                    batch_pairs = val_pairs[start_idx : start_idx + config.batch_size]
+                    texts = tokenizer.batch_encode([pair[0] for pair in batch_pairs], model_config.max_seq_len, device)
+                    codes = tokenizer.batch_encode([pair[1] for pair in batch_pairs], model_config.max_seq_len, device)
+                    z_text = model.encode(texts)
+                    z_code = model.encode(codes)
+                    z_pred = model.predict(z_text, action_id=1)
+                    val_losses.append(float(F.mse_loss(z_pred, z_code).detach().cpu().item()))
+
+            split_final_losses.append(final_loss)
+            split_val_losses.append(_mean(val_losses))
+            split_train_curves.append(train_curve[:4] + train_curve[-4:] if len(train_curve) > 8 else train_curve)
+            elapsed = max(time.time() - start, 1e-6)
+            split_throughputs.append((config.steps * config.batch_size) / elapsed)
+            if device.startswith("cuda"):
+                peak_vram_gb = max(peak_vram_gb, torch.cuda.max_memory_allocated() / 1e9)
+
         results[requested_size] = {
-            "final_loss": final_loss,
-            "val_loss": val_loss,
-            "train_curve": train_curve[:4] + train_curve[-4:] if len(train_curve) > 8 else train_curve,
-            "samples_per_sec": throughput,
+            "final_loss": _mean(split_final_losses),
+            "final_loss_std": _std(split_final_losses),
+            "val_loss": _mean(split_val_losses),
+            "val_loss_std": _std(split_val_losses),
+            "train_curve": _average_curves(split_train_curves),
+            "samples_per_sec": _mean(split_throughputs),
             "peak_vram_gb": peak_vram_gb,
             "fits_on_4090": peak_vram_gb < config.max_vram_gb if peak_vram_gb else True,
             "proxy_params": approximate_model_params(model_config),
+            "num_splits": config.num_splits,
         }
 
     ordered_sizes = sorted(config.sizes)
@@ -135,7 +166,8 @@ def run_phase4(config, device: str) -> dict:
     for earlier, later in zip(ordered_sizes, ordered_sizes[1:]):
         earlier_loss = results[earlier]["val_loss"]
         later_loss = results[later]["val_loss"]
-        if later_loss <= earlier_loss * 1.03:
+        later_uncertainty = results[later]["val_loss_std"]
+        if later_loss <= earlier_loss * 1.03 + later_uncertainty:
             tolerant_steps += 1
     monotonic_fraction = tolerant_steps / max(len(ordered_sizes) - 1, 1)
     log_sizes = [math.log(size) for size in ordered_sizes]
@@ -148,8 +180,9 @@ def run_phase4(config, device: str) -> dict:
     correlation = cov / math.sqrt(max(var_x * var_y, 1e-12))
     feasible = [size for size, details in results.items() if details["fits_on_4090"]]
     largest_wins = best_size == ordered_sizes[-1]
-    strong_gain = improvement >= 0.3 and monotonic_fraction >= 0.75 and correlation >= 0.6
-    steady_gain = improvement >= 0.1 and largest_wins and monotonic_fraction >= 0.75 and correlation >= 0.75
+    best_std = results[best_size]["val_loss_std"]
+    strong_gain = improvement >= 0.3 and monotonic_fraction >= 0.75 and correlation >= 0.6 and best_std <= 0.01
+    steady_gain = improvement >= 0.1 and largest_wins and monotonic_fraction >= 0.75 and correlation >= 0.75 and best_std <= 0.01
     scaling_efficient = strong_gain or steady_gain
     return {
         "scaling_efficient": scaling_efficient,
@@ -158,6 +191,7 @@ def run_phase4(config, device: str) -> dict:
         "largest_wins": largest_wins,
         "monotonic_fraction": monotonic_fraction,
         "loss_correlation": correlation,
+        "best_size_val_std": best_std,
         "max_feasible_params": max(feasible) if feasible else None,
         "proceed_to_2_7b": scaling_efficient and bool(feasible),
         "details": results,

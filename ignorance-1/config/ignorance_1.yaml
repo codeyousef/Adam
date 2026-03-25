@@ -38,3 +38,4 @@ phase4:
   batch_size: 4
   lr: 0.0001
   max_vram_gb: 22.0
+  num_splits: 3
