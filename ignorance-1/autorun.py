@@ -5,6 +5,7 @@ import argparse
 import copy
 import csv
 import json
+import os
 import subprocess
 import sys
 import time
@@ -24,6 +25,15 @@ RUNS_DIR = ARTIFACTS / "runs"
 RESULTS_TSV = ARTIFACTS / "results.tsv"
 AUTORUN_LOG = ARTIFACTS / "autorun.log"
 ROBUSTNESS_SEEDS = [42, 43, 44, 45]
+FINAL_CONFIRMATION_SEEDS = [42, 43, 44, 45, 46, 47, 48, 49]
+FINAL_SPLIT_STRESS_SEEDS = [42, 43, 44, 45]
+PRODUCTION_STRESS_SEEDS = [43, 47]
+PRODUCTION_CONFIRMATION_SEEDS = [42, 43, 44, 45, 46, 47, 48, 49]
+TRANSIENT_CUDA_ERROR_MARKERS = (
+    "cuda error: unspecified launch failure",
+    "cudaerrorlaunchfailure",
+    "torch.acceleratorerror",
+)
 
 
 @dataclass
@@ -200,6 +210,13 @@ def append_result(run_id: str, status: str, results: dict[str, Any] | None, desc
         )
     with RESULTS_TSV.open("a") as handle:
         handle.write(row)
+
+
+def is_transient_cuda_failure(log_path: Path) -> bool:
+    if not log_path.exists():
+        return False
+    log_text = log_path.read_text(encoding="utf-8", errors="ignore").lower()
+    return any(marker in log_text for marker in TRANSIENT_CUDA_ERROR_MARKERS)
 
 
 def candidate_queue() -> list[Experiment]:
@@ -479,98 +496,231 @@ def global_adaptive_experiments() -> list[Experiment]:
 def phase4_robustness_families() -> list[Experiment]:
     return [
         Experiment(
-            "phase4 robustness v2 family lower lr full ladder",
-            {
-                "profile": "robustness",
-                "phase4": {
-                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
-                    "steps": 48,
-                    "batch_size": 4,
-                    "lr": 0.00008,
-                    "num_splits": 3,
-                },
-            },
-        ),
-        Experiment(
-            "phase4 robustness v2 family lower lr medium long",
-            {
-                "profile": "robustness",
-                "phase4": {
-                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
-                    "steps": 72,
-                    "batch_size": 4,
-                    "lr": 0.00008,
-                    "num_splits": 3,
-                },
-            },
-        ),
-        Experiment(
-            "phase4 robustness v2 family very low lr full ladder",
+            "phase4 robustness v4 family lower lr full ladder",
             {
                 "profile": "robustness",
                 "phase4": {
                     "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
                     "steps": 64,
                     "batch_size": 4,
-                    "lr": 0.00006,
-                    "num_splits": 3,
+                    "lr": 0.00008,
+                    "num_splits": 5,
                 },
             },
         ),
         Experiment(
-            "phase4 robustness v2 family low lr dense ladder",
+            "phase4 robustness v4 family lower lr medium long",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 96,
+                    "batch_size": 4,
+                    "lr": 0.00008,
+                    "num_splits": 5,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v4 family very low lr full ladder",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 80,
+                    "batch_size": 4,
+                    "lr": 0.00006,
+                    "num_splits": 5,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v4 family very low lr medium long",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 112,
+                    "batch_size": 4,
+                    "lr": 0.00006,
+                    "num_splits": 5,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v4 family low lr dense ladder",
             {
                 "profile": "robustness",
                 "phase4": {
                     "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
-                    "steps": 64,
+                    "steps": 96,
                     "batch_size": 4,
                     "lr": 0.00008,
-                    "num_splits": 3,
+                    "num_splits": 5,
                 },
             },
         ),
         Experiment(
-            "phase4 robustness v2 family low lr heavy ladder",
+            "phase4 robustness v4 family ultra low lr dense ladder",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 128,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 5,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v4 family low lr larger batch",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 96,
+                    "batch_size": 6,
+                    "lr": 0.00008,
+                    "num_splits": 5,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v4 family very low lr larger batch",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 128,
+                    "batch_size": 6,
+                    "lr": 0.00006,
+                    "num_splits": 5,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v4 family very low lr heavy ladder",
             {
                 "profile": "robustness",
                 "phase4": {
                     "sizes": [80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
-                    "steps": 80,
+                    "steps": 128,
                     "batch_size": 4,
-                    "lr": 0.00008,
-                    "num_splits": 3,
+                    "lr": 0.00005,
+                    "num_splits": 5,
                 },
             },
         ),
         Experiment(
-            "phase4 robustness v2 family low lr larger batch",
+            "phase4 robustness v4 family ultra low lr upper heavy",
             {
                 "profile": "robustness",
                 "phase4": {
-                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
-                    "steps": 64,
-                    "batch_size": 6,
-                    "lr": 0.00008,
-                    "num_splits": 3,
+                    "sizes": [80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 160,
+                    "batch_size": 4,
+                    "lr": 0.00004,
+                    "num_splits": 5,
                 },
             },
         ),
+    ]
+
+
+def phase4_v5_recovery_families() -> list[Experiment]:
+    return [
         Experiment(
-            "phase4 robustness v2 family very low lr larger batch",
+            "phase4 robustness v5 family full distinct ladder",
             {
                 "profile": "robustness",
                 "phase4": {
-                    "sizes": [15_000_000, 80_000_000, 300_000_000, 600_000_000, 1_200_000_000],
-                    "steps": 80,
-                    "batch_size": 6,
-                    "lr": 0.00006,
-                    "num_splits": 3,
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 160,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
                 },
             },
         ),
         Experiment(
-            "phase4 robustness v2 family ultra low lr dense ladder",
+            "phase4 robustness v5 family upper heavy distinct",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 160,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v5 family upper heavy longer",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 224,
+                    "batch_size": 4,
+                    "lr": 0.00004,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v5 family upper heavy larger batch",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 192,
+                    "batch_size": 6,
+                    "lr": 0.00005,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v5 family upper only long",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 224,
+                    "batch_size": 4,
+                    "lr": 0.00004,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v5 family upper only ultra low lr",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 256,
+                    "batch_size": 4,
+                    "lr": 0.00003,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                },
+            },
+        ),
+    ]
+
+
+def phase4_v6_breadth_families() -> list[Experiment]:
+    return [
+        Experiment(
+            "phase4 robustness v6 family full distinct step scaled",
             {
                 "profile": "robustness",
                 "phase4": {
@@ -578,14 +728,223 @@ def phase4_robustness_families() -> list[Experiment]:
                     "steps": 96,
                     "batch_size": 4,
                     "lr": 0.00005,
-                    "num_splits": 3,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.5,
+                    "max_step_multiplier": 4.0,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v6 family full distinct step and lr scaled",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 96,
+                    "batch_size": 4,
+                    "lr": 0.00006,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.5,
+                    "max_step_multiplier": 4.0,
+                    "lr_scale_power": 0.3,
+                    "max_lr_divisor": 3.0,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v6 family upper heavy step scaled",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 128,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.35,
+                    "max_step_multiplier": 3.0,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v6 family upper heavy step and lr scaled",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 128,
+                    "batch_size": 4,
+                    "lr": 0.00006,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.35,
+                    "max_step_multiplier": 3.0,
+                    "lr_scale_power": 0.35,
+                    "max_lr_divisor": 3.0,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v6 family upper only long high splits",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 160,
+                    "batch_size": 4,
+                    "lr": 0.00004,
+                    "num_splits": 7,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.35,
+                    "max_step_multiplier": 3.0,
+                    "lr_scale_power": 0.3,
+                    "max_lr_divisor": 3.0,
+                },
+            },
+        ),
+        Experiment(
+            "phase4 robustness v6 family top triad ultra low lr",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 192,
+                    "batch_size": 4,
+                    "lr": 0.00003,
+                    "num_splits": 7,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.5,
+                    "max_step_multiplier": 4.0,
+                    "lr_scale_power": 0.4,
+                    "max_lr_divisor": 4.0,
                 },
             },
         ),
     ]
 
 
-def robustness_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
+def final_confirmation_families() -> list[Experiment]:
+    return [
+        Experiment(
+            "final confirmation family working recipe",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 96,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 5,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.5,
+                    "max_step_multiplier": 4.0,
+                },
+            },
+        ),
+        Experiment(
+            "final confirmation family working recipe high splits",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 96,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 7,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.5,
+                    "max_step_multiplier": 4.0,
+                },
+            },
+        ),
+    ]
+
+
+def production_readiness_families() -> list[Experiment]:
+    return [
+        Experiment(
+            "production readiness family long high splits",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 112,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 7,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.55,
+                    "max_step_multiplier": 5.0,
+                },
+            },
+        ),
+        Experiment(
+            "production readiness family long high splits lr scaled",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 112,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 7,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.55,
+                    "max_step_multiplier": 5.0,
+                    "lr_scale_power": 0.2,
+                    "max_lr_divisor": 2.5,
+                },
+            },
+        ),
+        Experiment(
+            "production readiness family extra high splits",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 112,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 9,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.5,
+                    "max_step_multiplier": 4.0,
+                },
+            },
+        ),
+        Experiment(
+            "production readiness family extra high splits lr scaled",
+            {
+                "profile": "robustness",
+                "phase4": {
+                    "sizes": [15_000_000, 40_000_000, 80_000_000, 150_000_000, 300_000_000, 600_000_000, 1_200_000_000],
+                    "steps": 128,
+                    "batch_size": 4,
+                    "lr": 0.00005,
+                    "num_splits": 9,
+                    "proxy_recipe": "v5_distinct",
+                    "step_scale_power": 0.6,
+                    "max_step_multiplier": 5.0,
+                    "lr_scale_power": 0.25,
+                    "max_lr_divisor": 3.0,
+                },
+            },
+        ),
+    ]
+
+
+def robustness_queue(
+    history_rows: list[dict[str, str]],
+    families: list[Experiment] | None = None,
+    seeds: list[int] | None = None,
+) -> list[Experiment]:
+    if families is None:
+        families = phase4_robustness_families()
+    if seeds is None:
+        seeds = ROBUSTNESS_SEEDS
     successful_descriptions = {
         row.get("description", "")
         for row in history_rows
@@ -604,9 +963,9 @@ def robustness_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
         seen_seeds = {robust_seed_from_description(row.get("description", "")) for row in rows}
         if None in seen_seeds:
             seen_seeds.discard(None)
-        all_done = all(seed in seen_seeds for seed in ROBUSTNESS_SEEDS)
+        all_done = all(seed in seen_seeds for seed in seeds)
         all_pass = all(row.get("phase4_pass") == "1" for row in rows if row.get("status") == "ok")
-        if all_done and all_pass and len(rows) >= len(ROBUSTNESS_SEEDS):
+        if all_done and all_pass and len(rows) >= len(seeds):
             passing_family_found = True
             break
 
@@ -614,7 +973,7 @@ def robustness_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
         return []
 
     queue: list[Experiment] = []
-    for family_exp in phase4_robustness_families():
+    for family_exp in families:
         family_name = family_exp.name
         existing = family_rows.get(family_name, [])
         existing_seeds = {
@@ -623,7 +982,7 @@ def robustness_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
             if row.get("status") == "ok"
         }
         existing_seeds.discard(None)
-        for seed in ROBUSTNESS_SEEDS:
+        for seed in seeds:
             description = f"{family_name} seed{seed}"
             if description in successful_descriptions:
                 continue
@@ -633,6 +992,91 @@ def robustness_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
         if queue:
             return queue
     return queue
+
+
+def final_confirmation_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
+    family_seeds: dict[str, list[int]] = {
+        "final confirmation family working recipe": FINAL_CONFIRMATION_SEEDS,
+        "final confirmation family working recipe high splits": FINAL_SPLIT_STRESS_SEEDS,
+    }
+    families = final_confirmation_families()
+    successful_descriptions = {
+        row.get("description", "")
+        for row in history_rows
+        if row.get("status") == "ok"
+    }
+
+    queue: list[Experiment] = []
+    for family in families:
+        seeds = family_seeds[family.name]
+        for seed in seeds:
+            description = f"{family.name} seed{seed}"
+            if description in successful_descriptions:
+                continue
+            updates = copy.deepcopy(family.updates)
+            updates["seed"] = seed
+            queue.append(Experiment(description, updates))
+    return queue
+
+
+def production_readiness_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
+    families = production_readiness_families()
+    rows_by_description = {
+        row.get("description", ""): row
+        for row in history_rows
+        if row.get("status") == "ok"
+    }
+
+    for family in families:
+        stress_missing: list[Experiment] = []
+        stress_rows: list[dict[str, str]] = []
+        for seed in PRODUCTION_STRESS_SEEDS:
+            description = f"{family.name} seed{seed}"
+            row = rows_by_description.get(description)
+            if row is None:
+                updates = copy.deepcopy(family.updates)
+                updates["seed"] = seed
+                stress_missing.append(Experiment(description, updates))
+            else:
+                stress_rows.append(row)
+        if stress_missing:
+            return stress_missing
+
+        stress_pass = all(
+            row.get("phase1_pass") == "1"
+            and row.get("phase2_pass") == "1"
+            and row.get("phase3_pass") == "1"
+            and row.get("phase4_pass") == "1"
+            for row in stress_rows
+        )
+        if not stress_pass:
+            continue
+
+        confirmation_missing: list[Experiment] = []
+        confirmation_rows: list[dict[str, str]] = []
+        for seed in PRODUCTION_CONFIRMATION_SEEDS:
+            description = f"{family.name} seed{seed}"
+            row = rows_by_description.get(description)
+            if row is None:
+                updates = copy.deepcopy(family.updates)
+                updates["seed"] = seed
+                confirmation_missing.append(Experiment(description, updates))
+            else:
+                confirmation_rows.append(row)
+        if confirmation_missing:
+            return confirmation_missing
+
+        confirmation_pass = all(
+            row.get("phase1_pass") == "1"
+            and row.get("phase2_pass") == "1"
+            and row.get("phase3_pass") == "1"
+            and row.get("phase4_pass") == "1"
+            for row in confirmation_rows
+        )
+        if confirmation_pass and len(confirmation_rows) >= len(PRODUCTION_CONFIRMATION_SEEDS):
+            return []
+
+    return []
 
 
 def adaptive_queue(history_rows: list[dict[str, str]], top_k: int) -> list[Experiment]:
@@ -688,6 +1132,14 @@ def build_queue(strategy: str, history_rows: list[dict[str, str]], top_k: int) -
         return seed_queue
     if strategy == "robustness":
         return robustness_queue(history_rows)
+    if strategy == "robustness_v5":
+        return robustness_queue(history_rows, phase4_v5_recovery_families())
+    if strategy == "robustness_v6":
+        return robustness_queue(history_rows, phase4_v6_breadth_families())
+    if strategy == "final_confirmation":
+        return final_confirmation_queue(history_rows)
+    if strategy == "production_readiness":
+        return production_readiness_queue(history_rows)
     if strategy == "adaptive":
         if not history_rows:
             return seed_queue
@@ -717,19 +1169,39 @@ def run_experiment(base_config: dict[str, Any], exp: Experiment, run_index: int)
         "--report",
         str(report_path),
     ]
-    with log_path.open("w") as log_handle:
-        proc = subprocess.run(cmd, cwd=ROOT, stdout=log_handle, stderr=subprocess.STDOUT, text=True)
+    env = os.environ.copy()
+    attempts = 2
+    for attempt in range(1, attempts + 1):
+        if output_path.exists():
+            output_path.unlink()
+        if report_path.exists():
+            report_path.unlink()
+        with log_path.open("a" if attempt > 1 else "w") as log_handle:
+            if attempt > 1:
+                log_handle.write(f"\n=== retry attempt {attempt} after transient CUDA failure ===\n")
+            proc = subprocess.run(
+                cmd,
+                cwd=ROOT,
+                env=env,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
 
-    if proc.returncode != 0 or not output_path.exists():
-        return run_id, None, proc.returncode
-    return run_id, json.loads(output_path.read_text()), proc.returncode
+        if proc.returncode == 0 and output_path.exists():
+            return run_id, json.loads(output_path.read_text()), proc.returncode
+        if attempt >= attempts or not is_transient_cuda_failure(log_path):
+            return run_id, None, proc.returncode
+        time.sleep(5)
+
+    return run_id, None, 1
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-hours", type=float, default=4.0)
     parser.add_argument("--max-experiments", type=int, default=999)
-    parser.add_argument("--strategy", choices=["seed", "adaptive", "hybrid", "robustness"], default="adaptive")
+    parser.add_argument("--strategy", choices=["seed", "adaptive", "hybrid", "robustness", "robustness_v5", "robustness_v6", "final_confirmation", "production_readiness"], default="adaptive")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

@@ -1,6 +1,6 @@
 seed: 42
 device: cuda
-profile: smoke
+profile: production_candidate
 
 phase1:
   embed_dim: 384
@@ -33,9 +33,14 @@ phase3:
   tasks: 3
 
 phase4:
-  sizes: [15000000, 80000000, 300000000, 600000000, 1200000000]
-  steps: 48
+  sizes: [15000000, 40000000, 80000000, 150000000, 300000000, 600000000, 1200000000]
+  steps: 112
   batch_size: 4
-  lr: 0.0001
+  lr: 0.00005
   max_vram_gb: 22.0
-  num_splits: 3
+  num_splits: 7
+  proxy_recipe: v5_distinct
+  step_scale_power: 0.55
+  max_step_multiplier: 5.0
+  lr_scale_power: 0.2
+  max_lr_divisor: 2.5

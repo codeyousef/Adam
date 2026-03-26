@@ -51,6 +51,11 @@ class Phase4Config:
     lr: float
     max_vram_gb: float
     num_splits: int = 3
+    proxy_recipe: str = "v4"
+    step_scale_power: float = 0.0
+    max_step_multiplier: float = 1.0
+    lr_scale_power: float = 0.0
+    max_lr_divisor: float = 1.0
 
 
 @dataclass
