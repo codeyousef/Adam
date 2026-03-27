@@ -20,11 +20,14 @@ def sigreg_loss(
     if z_flat.shape[0] < 2:
         return z_flat.new_tensor(0.0)
 
-    directions = torch.randn(m, dim, device=z.device, dtype=z.dtype)
+    directions = torch.randn(m, dim, device=z.device, dtype=torch.float32)
     directions = F.normalize(directions, dim=-1)
+    
+    # Cast to float32 for stable CF calculation
+    z_flat = z_flat.float()
     projections = z_flat @ directions.T
 
-    t_vals = torch.linspace(0.2, 4.0, num_knots, device=z.device, dtype=z.dtype)
+    t_vals = torch.linspace(0.2, 4.0, num_knots, device=z.device, dtype=torch.float32)
     weights = torch.exp(-(t_vals**2) / (2.0 * (lambda_reg**2)))
     target_cf = torch.exp(-(t_vals**2) / 2.0)
 
@@ -33,7 +36,7 @@ def sigreg_loss(
     diff = torch.abs(char_fn - target_cf.view(1, -1)) ** 2
     integrand = weights.view(1, -1) * diff
     loss = torch.trapezoid(integrand, t_vals, dim=-1).mean()
-    return loss.real
+    return loss.real.to(z.dtype)
 
 
 def isotropic_score(z: torch.Tensor) -> float:

@@ -1,0 +1,34 @@
+seed: 42
+device: cuda
+profile: latent_proxy_winning_recipe
+
+latent_proxy:
+  patch_size: 16
+  tokenizer_mode: char_ngram
+  annotation_prob: 0.67
+  use_hard_negatives: true
+  use_extended_families: true
+  use_multisource_families: true
+  use_virtual_nulls: true
+  family_holdout_eval: true
+  prompt_augmentation: true
+  paraphrase_weight: 0.2
+  vicreg_weight: 0.25
+  ood_weight: 0.25
+  sigreg_weight: 0.05
+  temperature: 0.07
+  embedding_weight: 0.65
+  mse_weight: 0.15
+  lr: 0.00025
+  warmup_steps: 80
+  ramp_regularizers: true
+
+evaluation:
+  target:
+    dense_gap_min: 0.08
+    cohesion_min: 0.65
+    isotropy_min: 0.55
+  notes:
+    - Proxy latent-space winner updated after corrected research batch from rows 447-448 in artifacts/results.tsv
+    - Best current recipe combines the prior optimizer winner with multi-source task families and virtual null snippets
+    - Corrected multisource-plus-nulls runs cleared seeds 49-50 with dense_gap 0.105 and 0.112 while paraphrase similarity improved to 0.832 and 0.878 and isotropy stayed at 0.665

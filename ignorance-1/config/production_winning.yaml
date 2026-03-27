@@ -1,0 +1,26 @@
+seed: 42
+device: cuda
+profile: production_winning_recipe
+
+phase4:
+  sizes: [15000000, 2700000000]
+  steps: 500
+  batch_size: 2
+  microbatch_size: 1
+  lr: 0.00002
+  max_vram_gb: 23.5
+  proxy_recipe: v6_overnight
+  step_scale_power: 0.55
+  max_step_multiplier: 10.0
+  lr_scale_power: 0.2
+  max_lr_divisor: 2.83
+  ood_weight: 0.2
+  clf_weight: 0.25
+
+evaluation:
+  lexical_weight: 0.7
+  confidence_threshold: 0.4
+  annotation_bridge: true
+  notes:
+    - Proxy-family winner: production readiness family long high splits lr scaled
+    - Targeted-findings winner: baseline hybrid gated

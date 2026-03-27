@@ -6,8 +6,9 @@ import time
 import torch
 import torch.nn.functional as F
 
+from src.losses.alignment import ignorance_penalty, paired_alignment_loss
 from src.models.jepa import JEPAConfig, JEPAModel, approximate_model_params
-from src.utils.data import SimpleTokenizer, make_text_code_pairs
+from src.utils.data import SimpleTokenizer, make_text_code_pairs, sample_ood_queries
 
 
 def _mean(values: list[float]) -> float:
@@ -174,7 +175,99 @@ def _proxy_config_v5_distinct(size: int) -> JEPAConfig:
     )
 
 
+def _proxy_config_v6_overnight(size: int) -> JEPAConfig:
+    if size <= 15_000_000:
+        return JEPAConfig(
+            embed_dim=192,
+            encoder_layers=4,
+            encoder_heads=6,
+            predictor_layers=4,
+            predictor_heads=6,
+            decoder_layers=2,
+            decoder_heads=6,
+            decoder_hidden_dim=192,
+        )
+    if size <= 40_000_000:
+        return JEPAConfig(
+            embed_dim=256,
+            encoder_layers=6,
+            encoder_heads=8,
+            predictor_layers=6,
+            predictor_heads=8,
+            decoder_layers=2,
+            decoder_heads=8,
+            decoder_hidden_dim=256,
+        )
+    if size <= 80_000_000:
+        return JEPAConfig(
+            embed_dim=320,
+            encoder_layers=8,
+            encoder_heads=10,
+            predictor_layers=8,
+            predictor_heads=10,
+            decoder_layers=3,
+            decoder_heads=10,
+            decoder_hidden_dim=320,
+        )
+    if size <= 150_000_000:
+        return JEPAConfig(
+            embed_dim=384,
+            encoder_layers=10,
+            encoder_heads=12,
+            predictor_layers=10,
+            predictor_heads=12,
+            decoder_layers=3,
+            decoder_heads=12,
+            decoder_hidden_dim=384,
+        )
+    if size <= 300_000_000:
+        return JEPAConfig(
+            embed_dim=512,
+            encoder_layers=12,
+            encoder_heads=16,
+            predictor_layers=12,
+            predictor_heads=16,
+            decoder_layers=4,
+            decoder_heads=16,
+            decoder_hidden_dim=512,
+        )
+    if size <= 600_000_000:
+        return JEPAConfig(
+            embed_dim=768,
+            encoder_layers=18,
+            encoder_heads=12,
+            predictor_layers=18,
+            predictor_heads=12,
+            decoder_layers=6,
+            decoder_heads=12,
+            decoder_hidden_dim=768,
+        )
+    if size <= 1_200_000_000:
+        return JEPAConfig(
+            embed_dim=1024,
+            encoder_layers=24,
+            encoder_heads=16,
+            predictor_layers=24,
+            predictor_heads=16,
+            decoder_layers=8,
+            decoder_heads=16,
+            decoder_hidden_dim=1024,
+        )
+    return JEPAConfig(
+        embed_dim=1728,
+        encoder_layers=32,
+        encoder_heads=12,
+        predictor_layers=32,
+        predictor_heads=12,
+        decoder_layers=10,
+        decoder_heads=12,
+        decoder_hidden_dim=1728,
+    )
+
+
 def _proxy_config(size: int, recipe: str) -> JEPAConfig:
+    if recipe == "v6_overnight":
+        return _proxy_config_v6_overnight(size)
     if recipe == "v5_distinct":
         return _proxy_config_v5_distinct(size)
     return _proxy_config_v4(size)
@@ -214,6 +307,7 @@ def run_phase4(config, device: str) -> dict:
         for train_pairs, val_pairs in shared_splits:
             model = JEPAModel(model_config).to(device)
             optimizer = torch.optim.AdamW(model.parameters(), lr=scaled_lr)
+            negative_queue = torch.empty(0, model_config.embed_dim, device=device)
             torch.cuda.reset_peak_memory_stats() if device.startswith("cuda") else None
             start = time.time()
             final_loss = 0.0
@@ -223,13 +317,23 @@ def run_phase4(config, device: str) -> dict:
                 batch_pairs = [train_pairs[(step * config.batch_size + offset) % len(train_pairs)] for offset in range(config.batch_size)]
                 texts = tokenizer.batch_encode([pair[0] for pair in batch_pairs], model_config.max_seq_len, device)
                 codes = tokenizer.batch_encode([pair[1] for pair in batch_pairs], model_config.max_seq_len, device)
+                ood = tokenizer.batch_encode(sample_ood_queries(len(batch_pairs)), model_config.max_seq_len, device)
                 z_text = model.encode(texts)
                 z_code = model.encode(codes)
+                z_ood = model.encode(ood)
                 z_pred = model.predict(z_text, action_id=1)
-                loss = F.mse_loss(z_pred, z_code)
+                z_ood_pred = model.predict(z_ood, action_id=1)
+                coding_logits = model.query_logits(z_text)
+                ood_logits = model.query_logits(z_ood)
+                loss, _ = paired_alignment_loss(z_text, z_code, z_pred, negative_pool=negative_queue)
+                code_candidates = torch.cat([z_code.detach(), negative_queue], dim=0) if negative_queue.numel() else z_code.detach()
+                clf_loss = F.binary_cross_entropy_with_logits(coding_logits, torch.ones_like(coding_logits))
+                clf_loss = clf_loss + F.binary_cross_entropy_with_logits(ood_logits, torch.zeros_like(ood_logits))
+                loss = loss + 0.2 * ignorance_penalty(z_ood, code_candidates) + 0.2 * ignorance_penalty(z_ood_pred, code_candidates) + 0.25 * clf_loss
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
+                negative_queue = torch.cat([z_code.detach(), negative_queue], dim=0)[: max(config.batch_size * 64, 256)]
                 final_loss = float(loss.detach().cpu().item())
                 train_curve.append(final_loss)
 
@@ -239,10 +343,20 @@ def run_phase4(config, device: str) -> dict:
                     batch_pairs = val_pairs[start_idx : start_idx + config.batch_size]
                     texts = tokenizer.batch_encode([pair[0] for pair in batch_pairs], model_config.max_seq_len, device)
                     codes = tokenizer.batch_encode([pair[1] for pair in batch_pairs], model_config.max_seq_len, device)
+                    ood = tokenizer.batch_encode(sample_ood_queries(len(batch_pairs)), model_config.max_seq_len, device)
                     z_text = model.encode(texts)
                     z_code = model.encode(codes)
+                    z_ood = model.encode(ood)
                     z_pred = model.predict(z_text, action_id=1)
-                    val_losses.append(float(F.mse_loss(z_pred, z_code).detach().cpu().item()))
+                    z_ood_pred = model.predict(z_ood, action_id=1)
+                    coding_logits = model.query_logits(z_text)
+                    ood_logits = model.query_logits(z_ood)
+                    val_loss, _ = paired_alignment_loss(z_text, z_code, z_pred, negative_pool=negative_queue)
+                    code_candidates = torch.cat([z_code.detach(), negative_queue], dim=0) if negative_queue.numel() else z_code.detach()
+                    clf_loss = F.binary_cross_entropy_with_logits(coding_logits, torch.ones_like(coding_logits))
+                    clf_loss = clf_loss + F.binary_cross_entropy_with_logits(ood_logits, torch.zeros_like(ood_logits))
+                    val_loss = val_loss + 0.2 * ignorance_penalty(z_ood, code_candidates) + 0.2 * ignorance_penalty(z_ood_pred, code_candidates) + 0.25 * clf_loss
+                    val_losses.append(float(val_loss.detach().cpu().item()))
 
             split_final_losses.append(final_loss)
             split_val_losses.append(_mean(val_losses))

@@ -5,6 +5,7 @@ from dataclasses import asdict
 import torch
 import torch.nn.functional as F
 
+from src.losses.alignment import paired_alignment_loss
 from src.losses.sigreg import collapse_detected, gaussian_projection_p_value, isotropic_score, sigreg_loss
 from src.models.jepa import JEPAConfig, JEPAModel
 from src.utils.data import SimpleTokenizer, make_text_code_pairs
@@ -43,7 +44,7 @@ def run_phase1(config, device: str) -> dict:
             z_code = model.encode(code_ids)
             z_pred = model.predict(z_text, action_id=1)
 
-            pred_loss = F.mse_loss(z_pred, z_code)
+            pred_loss, _ = paired_alignment_loss(z_text, z_code, z_pred)
             reg_loss = sigreg_loss(torch.stack([z_text, z_code], dim=1), m=config.projections, lambda_reg=lambda_reg)
             loss = pred_loss + lambda_reg * reg_loss
 

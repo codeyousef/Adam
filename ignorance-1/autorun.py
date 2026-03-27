@@ -1079,6 +1079,51 @@ def production_readiness_queue(history_rows: list[dict[str, str]]) -> list[Exper
     return []
 
 
+def production_readiness_full_queue(history_rows: list[dict[str, str]]) -> list[Experiment]:
+    families = production_readiness_families()
+    rows_by_description = {
+        row.get("description", ""): row
+        for row in history_rows
+        if row.get("status") == "ok"
+    }
+
+    queue: list[Experiment] = []
+    for family in families:
+        stress_missing: list[Experiment] = []
+        stress_rows: list[dict[str, str]] = []
+        for seed in PRODUCTION_STRESS_SEEDS:
+            description = f"{family.name} seed{seed}"
+            row = rows_by_description.get(description)
+            if row is None:
+                updates = copy.deepcopy(family.updates)
+                updates["seed"] = seed
+                stress_missing.append(Experiment(description, updates))
+            else:
+                stress_rows.append(row)
+        if stress_missing:
+            queue.extend(stress_missing)
+            continue
+
+        stress_pass = all(
+            row.get("phase1_pass") == "1"
+            and row.get("phase2_pass") == "1"
+            and row.get("phase3_pass") == "1"
+            and row.get("phase4_pass") == "1"
+            for row in stress_rows
+        )
+        if not stress_pass:
+            continue
+
+        for seed in PRODUCTION_CONFIRMATION_SEEDS:
+            description = f"{family.name} seed{seed}"
+            if description in rows_by_description:
+                continue
+            updates = copy.deepcopy(family.updates)
+            updates["seed"] = seed
+            queue.append(Experiment(description, updates))
+    return queue
+
+
 def adaptive_queue(history_rows: list[dict[str, str]], top_k: int) -> list[Experiment]:
     if not history_rows:
         return []
@@ -1140,6 +1185,8 @@ def build_queue(strategy: str, history_rows: list[dict[str, str]], top_k: int) -
         return final_confirmation_queue(history_rows)
     if strategy == "production_readiness":
         return production_readiness_queue(history_rows)
+    if strategy == "production_readiness_full":
+        return production_readiness_full_queue(history_rows)
     if strategy == "adaptive":
         if not history_rows:
             return seed_queue
@@ -1201,7 +1248,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-hours", type=float, default=4.0)
     parser.add_argument("--max-experiments", type=int, default=999)
-    parser.add_argument("--strategy", choices=["seed", "adaptive", "hybrid", "robustness", "robustness_v5", "robustness_v6", "final_confirmation", "production_readiness"], default="adaptive")
+    parser.add_argument("--strategy", choices=["seed", "adaptive", "hybrid", "robustness", "robustness_v5", "robustness_v6", "final_confirmation", "production_readiness", "production_readiness_full"], default="adaptive")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
