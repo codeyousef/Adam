@@ -52,6 +52,20 @@ def isotropic_score(z: torch.Tensor) -> float:
     return float(score.clamp(0.0, 1.0).item())
 
 
+def covariance_logdet_loss(z: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
+    if z.ndim == 3:
+        z = z.reshape(-1, z.shape[-1])
+    if z.shape[0] < 2:
+        return z.new_tensor(0.0)
+    z = z.float()
+    z = z - z.mean(dim=0, keepdim=True)
+    cov = (z.T @ z) / max(z.shape[0] - 1, 1)
+    cov = cov + eps * torch.eye(cov.shape[0], device=z.device, dtype=cov.dtype)
+    sign, logdet = torch.linalg.slogdet(cov)
+    logdet = torch.where(sign > 0, logdet, logdet.new_tensor(0.0))
+    return (-logdet).to(z.dtype)
+
+
 def gaussian_projection_p_value(z: torch.Tensor, num_projections: int = 32) -> float:
     if z.ndim == 3:
         z = z.reshape(-1, z.shape[-1])

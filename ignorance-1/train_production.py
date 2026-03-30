@@ -35,7 +35,7 @@ from src.utils.data import (
     sample_ood_queries,
 )
 from src.training.phase4 import _proxy_config, _scaled_training_hparams, _update_ema_model, _lr_multiplier
-from src.losses.sigreg import sigreg_loss, isotropic_score, collapse_detected
+from src.losses.sigreg import sigreg_loss, isotropic_score, collapse_detected, covariance_logdet_loss
 
 class LatentBuffer:
     def __init__(self, size: int, dim: int, device: str):
@@ -221,6 +221,14 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
     prototype_temperature = float(getattr(config, "prototype_temperature", 0.1))
     vicreg_queue_samples = int(getattr(config, "vicreg_queue_samples", 0) or 0)
     ignorance_warmup_fraction = float(getattr(config, "ignorance_warmup_fraction", 0.0))
+    ignorance_start_step = int(getattr(config, "ignorance_start_step", 0) or 0)
+    ignorance_ramp_steps = int(getattr(config, "ignorance_ramp_steps", 0) or 0)
+    rank_reg_weight = float(getattr(config, "rank_reg_weight", 0.0))
+    rank_reg_eps = float(getattr(config, "rank_reg_eps", 1e-4))
+    rank_reg_target = str(getattr(config, "rank_reg_target", "none")).strip().lower()
+    rank_reg_targets = {t for t in rank_reg_target.replace("+", ",").split(",") if t}
+    if "none" in rank_reg_targets:
+        rank_reg_targets = set()
     stat_buffer_size = int(getattr(config, "stat_buffer_size", 1024) or 1024)
     query_buffer_size = int(getattr(config, "query_buffer_size", 2048) or 2048)
     code_buffer_size = int(getattr(config, "code_buffer_size", 2048) or 2048)
@@ -277,6 +285,11 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
         f"use_vicreg_retrieval={use_vicreg_retrieval}, vicreg_weight={vicreg_weight:.2f}, "
         f"vicreg_prediction_weight={vicreg_prediction_weight:.2f}, queue_samples={vicreg_queue_samples}, "
         f"ignorance_warmup_fraction={ignorance_warmup_fraction:.2f}"
+    )
+    print(
+        "Rank reg: "
+        f"weight={rank_reg_weight:.3f}, eps={rank_reg_eps:.1e}, target={rank_reg_target}, "
+        f"ignorance_start_step={ignorance_start_step}, ignorance_ramp_steps={ignorance_ramp_steps}"
     )
     print(
         "Query multiview: "
@@ -392,6 +405,7 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
         current_query_spread_weight = query_spread_weight * regularizer_scale
         current_pred_spread_weight = pred_spread_weight * regularizer_scale
         current_sigreg_weight = 0.5 * regularizer_scale
+        current_rank_reg_weight = rank_reg_weight * regularizer_scale
         current_vicreg_weight = vicreg_weight * regularizer_scale
         current_momentum_queue_weight = momentum_queue_weight * regularizer_scale
         current_momentum_queue_prediction_weight = momentum_queue_prediction_weight * regularizer_scale
@@ -399,7 +413,15 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
         current_prototype_code_weight = prototype_code_weight * regularizer_scale
         current_prototype_prediction_weight = prototype_prediction_weight * regularizer_scale
         current_prototype_repulsion_weight = prototype_repulsion_weight * regularizer_scale
-        ignorance_scale = _ramp_scale(step, scaled_steps, ignorance_warmup_fraction) if ignorance_warmup_fraction > 0.0 else 1.0
+        if ignorance_start_step > 0 and step < ignorance_start_step:
+            ignorance_scale = 0.0
+        elif ignorance_ramp_steps > 0:
+            ramp_step = max(step - ignorance_start_step, 0)
+            ignorance_scale = min((ramp_step + 1) / max(ignorance_ramp_steps, 1), 1.0)
+        elif ignorance_warmup_fraction > 0.0:
+            ignorance_scale = _ramp_scale(step, scaled_steps, ignorance_warmup_fraction)
+        else:
+            ignorance_scale = 1.0
         current_ood_weight = ood_weight * ignorance_scale
         current_clf_weight = clf_weight * ignorance_scale
 
@@ -624,6 +646,22 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                     spread_loss = pairwise_similarity_penalty(code_buffer.get(), max_samples=128)
                     query_spread_loss = pairwise_similarity_penalty(query_buffer.get(), max_samples=128)
                     pred_spread_loss = pairwise_similarity_penalty(pred_buffer.get(), max_samples=128)
+                    rank_reg_loss = z_text.new_tensor(0.0)
+                    if current_rank_reg_weight > 0.0 and rank_reg_targets:
+                        rank_targets = rank_reg_targets
+                        if "all" in rank_targets:
+                            rank_targets = {"code", "query", "pred"}
+                        rank_components = []
+                        if "both" in rank_targets:
+                            rank_targets = (rank_targets - {"both"}) | {"code", "query"}
+                        if "code" in rank_targets:
+                            rank_components.append(covariance_logdet_loss(code_buffer.get(), eps=rank_reg_eps))
+                        if "query" in rank_targets:
+                            rank_components.append(covariance_logdet_loss(query_buffer.get(), eps=rank_reg_eps))
+                        if "pred" in rank_targets:
+                            rank_components.append(covariance_logdet_loss(pred_buffer.get(), eps=rank_reg_eps))
+                        if rank_components:
+                            rank_reg_loss = torch.stack(rank_components).mean()
                     micro_loss = (
                         pred_loss
                         + current_margin_weight * margin_loss
@@ -633,11 +671,13 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                         + current_ood_weight * ignorance_loss
                         + current_clf_weight * clf_loss
                         + current_sigreg_weight * reg_loss
+                        + current_rank_reg_weight * rank_reg_loss
                         + current_spread_weight * spread_loss
                         + current_query_spread_weight * query_spread_loss
                         + current_pred_spread_weight * pred_spread_loss
                     )
                 else:
+                    rank_reg_loss = z_text.new_tensor(0.0)
                     micro_loss = (
                         pred_loss
                         + current_margin_weight * margin_loss
@@ -646,6 +686,7 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                         + prototype_loss
                         + current_ood_weight * ignorance_loss
                         + current_clf_weight * clf_loss
+                        + current_rank_reg_weight * rank_reg_loss
                     )
 
             num_microbatches += 1
