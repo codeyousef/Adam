@@ -250,6 +250,30 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
     num_microbatches_per_step = max((config.batch_size + microbatch_size - 1) // microbatch_size, 1)
     
     model_config = _proxy_config(size, proxy_recipe)
+    embed_dim_override = int(getattr(config, "embed_dim_override", 0) or 0)
+    encoder_layers_override = int(getattr(config, "encoder_layers_override", 0) or 0)
+    encoder_heads_override = int(getattr(config, "encoder_heads_override", 0) or 0)
+    predictor_layers_override = int(getattr(config, "predictor_layers_override", 0) or 0)
+    predictor_heads_override = int(getattr(config, "predictor_heads_override", 0) or 0)
+    decoder_layers_override = int(getattr(config, "decoder_layers_override", 0) or 0)
+    decoder_heads_override = int(getattr(config, "decoder_heads_override", 0) or 0)
+    decoder_hidden_dim_override = int(getattr(config, "decoder_hidden_dim_override", 0) or 0)
+    if embed_dim_override > 0:
+        model_config.embed_dim = embed_dim_override
+    if encoder_layers_override > 0:
+        model_config.encoder_layers = encoder_layers_override
+    if encoder_heads_override > 0:
+        model_config.encoder_heads = encoder_heads_override
+    if predictor_layers_override > 0:
+        model_config.predictor_layers = predictor_layers_override
+    if predictor_heads_override > 0:
+        model_config.predictor_heads = predictor_heads_override
+    if decoder_layers_override > 0:
+        model_config.decoder_layers = decoder_layers_override
+    if decoder_heads_override > 0:
+        model_config.decoder_heads = decoder_heads_override
+    if decoder_hidden_dim_override > 0:
+        model_config.decoder_hidden_dim = decoder_hidden_dim_override
     if max_seq_len_override > 0:
         model_config.max_seq_len = max_seq_len_override
     scaled_steps, scaled_lr, step_mult, lr_div = _scaled_training_hparams(config, size)
