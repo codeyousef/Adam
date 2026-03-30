@@ -1,0 +1,57 @@
+seed: 42
+device: cuda
+profile: production_strict_retrieval_datafix_dynamics
+
+phase4:
+  sizes: [15000000, 2700000000]
+  steps: 500
+  batch_size: 2
+  microbatch_size: 1
+  max_seq_len: 192
+  optimizer: paged_adamw32bit
+  paged_optimizer: true
+  use_retrieval_data_strategy: true
+  max_hard_negatives_per_example: 2
+  lr: 0.00001
+  max_vram_gb: 23.5
+  proxy_recipe: v6_overnight
+  step_scale_power: 0.55
+  max_step_multiplier: 10.0
+  lr_scale_power: 0.2
+  max_lr_divisor: 2.83
+  scheduler: cosine
+  warmup_fraction: 0.25
+  min_lr_ratio: 0.20
+  ramp_regularizers: true
+  regularizer_ramp_fraction: 0.30
+  ood_weight: 0.15
+  clf_weight: 0.35
+  ignorance_warmup_fraction: 0.30
+  ema_target_decay: 0.995
+  alignment_temperature: 0.05
+  retrieval_margin: 0.20
+  retrieval_margin_weight: 0.75
+  spread_weight: 0.05
+  query_spread_weight: 0.10
+  pred_spread_weight: 0.10
+  use_vicreg_retrieval: true
+  vicreg_weight: 1.0
+  vicreg_invariance_weight: 1.0
+  vicreg_variance_weight: 1.0
+  vicreg_covariance_weight: 0.10
+  vicreg_variance_target: 0.75
+  vicreg_prediction_weight: 1.0
+  vicreg_queue_samples: 128
+  stat_buffer_size: 512
+  query_buffer_size: 1024
+  code_buffer_size: 1024
+  pred_buffer_size: 1024
+
+evaluation:
+  lexical_weight: 0.7
+  confidence_threshold: 0.4
+  intent: promote the only proxy branch that improved query and prediction rank without collapsing retrieval into the stable 2.7B data-fix production path
+  notes:
+    - Uses the stable paged 32-bit AdamW optimizer and 192-token envelope from the working 2.7B runs.
+    - Adopts the winning proxy dynamics: lower LR, cosine schedule, warmup, and regularizer ramp.
+    - Reintroduces ignorance objectives gradually instead of from step zero.
