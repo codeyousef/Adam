@@ -79,53 +79,8 @@ def load_base_config() -> dict[str, Any]:
 def experiment_queue() -> list[SweepExperiment]:
     return [
         SweepExperiment(
-            "embed256 rankreg 0.015 margin1.0",
-            {"phase4": {"rank_reg_weight": 0.015, "retrieval_margin_weight": 1.0}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 rankreg 0.02 margin1.0",
-            {"phase4": {"rank_reg_weight": 0.02, "retrieval_margin_weight": 1.0}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 rankreg 0.025 margin1.0",
-            {"phase4": {"rank_reg_weight": 0.025, "retrieval_margin_weight": 1.0}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 rankreg 0.02 margin0.8",
-            {"phase4": {"rank_reg_weight": 0.02, "retrieval_margin_weight": 0.8}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 lower ood/clf margin1.0",
-            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "retrieval_margin_weight": 1.0}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 lower ood/clf margin0.8",
-            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "retrieval_margin_weight": 0.8}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 lower ood/clf rankreg0.02",
-            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "rank_reg_weight": 0.02}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 lower ood/clf rankreg0.02 margin1.0",
-            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "rank_reg_weight": 0.02, "retrieval_margin_weight": 1.0}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 margin1.0 spread0.2",
-            {"phase4": {"retrieval_margin_weight": 1.0, "query_spread_weight": 0.2, "pred_spread_weight": 0.2}},
-            embed_override=256,
-        ),
-        SweepExperiment(
-            "embed256 rankreg0.02 spread0.2",
-            {"phase4": {"rank_reg_weight": 0.02, "query_spread_weight": 0.2, "pred_spread_weight": 0.2}},
+            "embed256 rankreg0.02 margin0.9 spread0.2",
+            {"phase4": {"rank_reg_weight": 0.02, "retrieval_margin_weight": 0.9, "query_spread_weight": 0.2, "pred_spread_weight": 0.2}},
             embed_override=256,
         ),
         SweepExperiment(
@@ -134,8 +89,53 @@ def experiment_queue() -> list[SweepExperiment]:
             embed_override=256,
         ),
         SweepExperiment(
+            "embed256 rankreg0.02 margin1.1 spread0.2",
+            {"phase4": {"rank_reg_weight": 0.02, "retrieval_margin_weight": 1.1, "query_spread_weight": 0.2, "pred_spread_weight": 0.2}},
+            embed_override=256,
+        ),
+        SweepExperiment(
+            "embed256 rankreg0.02 margin0.8 spread0.2",
+            {"phase4": {"rank_reg_weight": 0.02, "retrieval_margin_weight": 0.8, "query_spread_weight": 0.2, "pred_spread_weight": 0.2}},
+            embed_override=256,
+        ),
+        SweepExperiment(
+            "embed256 rankreg0.02 margin1.0",
+            {"phase4": {"rank_reg_weight": 0.02, "retrieval_margin_weight": 1.0}},
+            embed_override=256,
+        ),
+        SweepExperiment(
+            "embed256 rankreg0.02 margin0.9",
+            {"phase4": {"rank_reg_weight": 0.02, "retrieval_margin_weight": 0.9}},
+            embed_override=256,
+        ),
+        SweepExperiment(
+            "embed256 lower ood/clf margin0.9 spread0.2",
+            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "retrieval_margin_weight": 0.9, "query_spread_weight": 0.2, "pred_spread_weight": 0.2}},
+            embed_override=256,
+        ),
+        SweepExperiment(
             "embed256 lower ood/clf margin1.0 spread0.2",
             {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "retrieval_margin_weight": 1.0, "query_spread_weight": 0.2, "pred_spread_weight": 0.2}},
+            embed_override=256,
+        ),
+        SweepExperiment(
+            "embed256 lower ood/clf margin1.1 spread0.2",
+            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "retrieval_margin_weight": 1.1, "query_spread_weight": 0.2, "pred_spread_weight": 0.2}},
+            embed_override=256,
+        ),
+        SweepExperiment(
+            "embed256 lower ood/clf margin0.9",
+            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "retrieval_margin_weight": 0.9}},
+            embed_override=256,
+        ),
+        SweepExperiment(
+            "embed256 lower ood/clf margin1.0",
+            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "retrieval_margin_weight": 1.0}},
+            embed_override=256,
+        ),
+        SweepExperiment(
+            "embed256 lower ood/clf margin1.1",
+            {"phase4": {"ood_weight": 0.05, "clf_weight": 0.15, "retrieval_margin_weight": 1.1}},
             embed_override=256,
         ),
     ]
