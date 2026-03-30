@@ -229,6 +229,8 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
     rank_reg_targets = {t for t in rank_reg_target.replace("+", ",").split(",") if t}
     if "none" in rank_reg_targets:
         rank_reg_targets = set()
+    query_margin_weight = float(getattr(config, "query_margin_weight", 0.0))
+    query_margin = float(getattr(config, "query_margin", retrieval_margin))
     stat_buffer_size = int(getattr(config, "stat_buffer_size", 1024) or 1024)
     query_buffer_size = int(getattr(config, "query_buffer_size", 2048) or 2048)
     code_buffer_size = int(getattr(config, "code_buffer_size", 2048) or 2048)
@@ -407,6 +409,7 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
         current_sigreg_weight = 0.5 * regularizer_scale
         current_rank_reg_weight = rank_reg_weight * regularizer_scale
         current_vicreg_weight = vicreg_weight * regularizer_scale
+        current_query_margin_weight = query_margin_weight * regularizer_scale
         current_momentum_queue_weight = momentum_queue_weight * regularizer_scale
         current_momentum_queue_prediction_weight = momentum_queue_prediction_weight * regularizer_scale
         current_prototype_weight = prototype_weight * regularizer_scale
@@ -662,6 +665,14 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                             rank_components.append(covariance_logdet_loss(pred_buffer.get(), eps=rank_reg_eps))
                         if rank_components:
                             rank_reg_loss = torch.stack(rank_components).mean()
+                    query_margin_loss = z_text.new_tensor(0.0)
+                    if z_text_alt is not None and current_query_margin_weight > 0.0:
+                        query_margin_loss = retrieval_margin_loss(
+                            z_text,
+                            z_text_alt,
+                            negative_pool=query_buffer.get(),
+                            margin=query_margin,
+                        )
                     micro_loss = (
                         pred_loss
                         + current_margin_weight * margin_loss
@@ -672,12 +683,14 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                         + current_clf_weight * clf_loss
                         + current_sigreg_weight * reg_loss
                         + current_rank_reg_weight * rank_reg_loss
+                        + current_query_margin_weight * query_margin_loss
                         + current_spread_weight * spread_loss
                         + current_query_spread_weight * query_spread_loss
                         + current_pred_spread_weight * pred_spread_loss
                     )
                 else:
                     rank_reg_loss = z_text.new_tensor(0.0)
+                    query_margin_loss = z_text.new_tensor(0.0)
                     micro_loss = (
                         pred_loss
                         + current_margin_weight * margin_loss
@@ -687,6 +700,7 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                         + current_ood_weight * ignorance_loss
                         + current_clf_weight * clf_loss
                         + current_rank_reg_weight * rank_reg_loss
+                        + current_query_margin_weight * query_margin_loss
                     )
 
             num_microbatches += 1
