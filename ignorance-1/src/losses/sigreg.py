@@ -61,6 +61,7 @@ def covariance_logdet_loss(z: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
     z = z - z.mean(dim=0, keepdim=True)
     cov = (z.T @ z) / max(z.shape[0] - 1, 1)
     cov = cov + eps * torch.eye(cov.shape[0], device=z.device, dtype=cov.dtype)
+    cov = cov.float()
     sign, logdet = torch.linalg.slogdet(cov)
     logdet = torch.where(sign > 0, logdet, logdet.new_tensor(0.0))
     return (-logdet).to(z.dtype)
