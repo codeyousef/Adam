@@ -160,6 +160,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-experiments", type=int, default=999)
     parser.add_argument("--match", type=str, default="")
+    parser.add_argument("--evaluate-only", action="store_true")
     args = parser.parse_args()
 
     ensure_results_header()
@@ -184,22 +185,23 @@ def main() -> int:
 
         model_path = run_dir / "model.pt"
         print(f"[sweep] {exp.name}")
-        train_cmd = [
-            str(PYTHON),
-            "train_production.py",
-            "--config",
-            str(config_path),
-            "--size",
-            "15000000",
-            "--output",
-            str(model_path),
-            "--device",
-            "cuda",
-        ]
-        rc = run_command(train_cmd)
-        if rc != 0:
-            append_result(run_id, f"train_failed({rc})", None)
-            continue
+        if not args.evaluate_only or not model_path.exists():
+            train_cmd = [
+                str(PYTHON),
+                "train_production.py",
+                "--config",
+                str(config_path),
+                "--size",
+                "15000000",
+                "--output",
+                str(model_path),
+                "--device",
+                "cuda",
+            ]
+            rc = run_command(train_cmd)
+            if rc != 0:
+                append_result(run_id, f"train_failed({rc})", None)
+                continue
 
         summary_path = run_dir / "summary.json"
         test_cmd = [
@@ -235,13 +237,18 @@ def main() -> int:
         if not output:
             append_result(run_id, "test_failed(empty)", None)
             continue
-        # Extract last JSON object printed
-        json_start = output.rfind("{")
-        if json_start == -1:
+        lines = output.splitlines()
+        json_line_index = None
+        for idx, line in enumerate(lines):
+            if line.strip().startswith("{"):
+                json_line_index = idx
+                break
+        if json_line_index is None:
             append_result(run_id, "test_failed(no_json)", None)
             continue
+        json_blob = "\n".join(lines[json_line_index:])
         try:
-            summary = json.loads(output[json_start:])
+            summary = json.loads(json_blob)
         except json.JSONDecodeError:
             append_result(run_id, "test_failed(bad_json)", None)
             continue
