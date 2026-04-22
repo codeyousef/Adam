@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import copy
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import autorun
+
+FRESH_BLOCK_SEEDS = [97, 98, 99]
+
+
+def build_families() -> list[autorun.Experiment]:
+    base = {
+        "sizes": [300_000_000, 600_000_000, 1_200_000_000],
+        "steps": 112,
+        "batch_size": 4,
+        "lr": 0.00005,
+        "num_splits": 7,
+        "proxy_recipe": "v5_distinct",
+        "validation_eval_mode": True,
+        "common_random_numbers": True,
+        "split_seed_stride": 1000,
+        "data_seed_offset": 0,
+        "init_seed_offset": 100_000,
+        "train_seed_offset": 200_000,
+        "grad_accum_steps": 4,
+        "reference_size": 300_000_000,
+        "step_scale_power": 0.55,
+        "max_step_multiplier": 5.0,
+        "lr_scale_power": 0.2,
+        "max_lr_divisor": 2.5,
+        "ignorance_ood_weight": 0.2,
+        "ignorance_pred_weight": 0.2,
+        "classifier_weight": 0.25,
+        "alignment_prediction_weight": 1.0,
+        "alignment_embedding_weight": 0.5,
+        "alignment_mse_weight": 0.25,
+        "ranking_margin_weight": 0.0,
+        "ranking_margin": 0.2,
+        "ranking_focal_gamma": 0.0,
+        "ranking_start_fraction": 0.0,
+        "ranking_ramp_fraction": 0.0,
+        "ranking_largest_only": False,
+        "phase4_dataset": "benchmark_v1",
+        "phase4_balance_families": False,
+        "phase4_joint_training": False,
+        "champion_challenger_weight": 0.0,
+        "champion_challenger_margin": 0.05,
+        "champion_challenger_temperature": 0.1,
+        "champion_challenger_start_fraction": 0.0,
+        "champion_challenger_ramp_fraction": 0.0,
+    }
+    semantic = {**base, "phase4_dataset": "semantic_contrast_v1"}
+    balanced = {**semantic, "phase4_balance_families": True}
+    ranking_light = {
+        **balanced,
+        "ranking_margin_weight": 0.05,
+        "ranking_margin": 0.2,
+    }
+    cc_staged_hard = {
+        **balanced,
+        "phase4_joint_training": True,
+        "champion_challenger_weight": 0.5,
+        "champion_challenger_margin": 0.05,
+        "champion_challenger_temperature": 0.1,
+        "champion_challenger_start_fraction": 0.3,
+        "champion_challenger_ramp_fraction": 0.2,
+    }
+    cc_staged_smooth = {
+        **balanced,
+        "phase4_joint_training": True,
+        "champion_challenger_weight": 0.5,
+        "champion_challenger_margin": 0.03,
+        "champion_challenger_temperature": 0.2,
+        "champion_challenger_start_fraction": 0.3,
+        "champion_challenger_ramp_fraction": 0.2,
+    }
+    cc_immediate_hard = {
+        **balanced,
+        "phase4_joint_training": True,
+        "champion_challenger_weight": 0.5,
+        "champion_challenger_margin": 0.05,
+        "champion_challenger_temperature": 0.1,
+    }
+    cc_plus_ranking = {
+        **cc_staged_hard,
+        "ranking_margin_weight": 0.05,
+        "ranking_margin": 0.2,
+    }
+
+    return [
+        autorun.Experiment(
+            "research18 benchmark control upper ladder",
+            {"profile": "robustness", "phase4": {**base}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast upper ladder",
+            {"profile": "robustness", "phase4": {**semantic}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast balanced upper ladder",
+            {"profile": "robustness", "phase4": {**balanced}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast joint upper ladder",
+            {"profile": "robustness", "phase4": {**semantic, "phase4_joint_training": True}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast balanced joint upper ladder",
+            {"profile": "robustness", "phase4": {**balanced, "phase4_joint_training": True}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast balanced upper ladder ranking light",
+            {"profile": "robustness", "phase4": {**ranking_light}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast balanced joint upper ladder ranking light",
+            {"profile": "robustness", "phase4": {**ranking_light, "phase4_joint_training": True}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast balanced joint upper ladder champion challenger staged hard",
+            {"profile": "robustness", "phase4": {**cc_staged_hard}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast balanced joint upper ladder champion challenger staged smooth",
+            {"profile": "robustness", "phase4": {**cc_staged_smooth}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast balanced joint upper ladder champion challenger immediate hard",
+            {"profile": "robustness", "phase4": {**cc_immediate_hard}},
+        ),
+        autorun.Experiment(
+            "research18 semantic contrast balanced joint upper ladder champion challenger plus ranking",
+            {"profile": "robustness", "phase4": {**cc_plus_ranking}},
+        ),
+    ]
+
+
+def build_queue() -> list[autorun.Experiment]:
+    queue: list[autorun.Experiment] = []
+    for family in build_families():
+        for seed in FRESH_BLOCK_SEEDS:
+            updates = copy.deepcopy(family.updates)
+            updates["seed"] = seed
+            queue.append(autorun.Experiment(f"{family.name} seed{seed}", updates))
+    return queue
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    autorun.ensure_results_header()
+    history_rows = autorun.parse_results_table()
+    successful = {row.get("description", "") for row in history_rows if row.get("status") == "ok"}
+    queue = [exp for exp in build_queue() if exp.name not in successful]
+
+    if args.dry_run:
+        for index, exp in enumerate(queue, start=autorun.next_run_index(history_rows)):
+            print(f"{index:03d}\t{exp.name}\t{exp.updates}")
+        return 0
+
+    if not queue:
+        print("No pending research18 overnight experiments.")
+        return 0
+
+    base_config = autorun.yaml.safe_load(autorun.BASE_CONFIG.read_text())
+    run_index = autorun.next_run_index(autorun.parse_results_table())
+
+    with autorun.AUTORUN_LOG.open("a") as log_handle:
+        log_handle.write(f"start {time.strftime('%Y-%m-%d %H:%M:%S')} strategy=research18_semantic_contrast_overnight_batch\n")
+        for exp in queue:
+            log_handle.write(f"run {run_index}: {exp.name}\n")
+            log_handle.flush()
+            run_id, results, returncode = autorun.run_experiment(base_config, exp, run_index)
+            status = "ok" if results is not None else f"failed({returncode})"
+            autorun.append_result(run_id, status, results, exp.name)
+            log_handle.write(f"completed {run_id} status={status}\n")
+            log_handle.flush()
+            run_index += 1
+        log_handle.write(f"end {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

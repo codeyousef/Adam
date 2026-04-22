@@ -120,6 +120,108 @@ def load_run_config(run_id: str) -> dict[str, Any] | None:
     return yaml.safe_load(config_path.read_text())
 
 
+def load_run_results(run_id: str) -> dict[str, Any] | None:
+    results_path = RUNS_DIR / run_id / "results.json"
+    if not results_path.exists():
+        return None
+    return json.loads(results_path.read_text())
+
+
+PHASE4_SIGNATURE_DEFAULTS: dict[str, Any] = {
+    "sizes": [],
+    "steps": 0,
+    "batch_size": 0,
+    "lr": 0.0,
+    "num_splits": 3,
+    "phase4_dataset": "benchmark_v1",
+    "phase4_balance_families": False,
+    "phase4_factorized_hard_negatives": False,
+    "phase4_ood_mode": "default",
+    "phase4_prompt_template": "default",
+    "proxy_recipe": "v4",
+    "reference_size": None,
+    "step_scale_power": 0.0,
+    "max_step_multiplier": 1.0,
+    "lr_scale_power": 0.0,
+    "max_lr_divisor": 1.0,
+    "scheduler": "constant",
+    "warmup_fraction": 0.0,
+    "min_lr_ratio": 1.0,
+    "grad_accum_steps": 1,
+    "ema_target_decay": 0.0,
+    "proxy_disable_batchnorm": False,
+    "common_random_numbers": False,
+    "split_seed_stride": 1000,
+    "data_seed_offset": 0,
+    "init_seed_offset": 100_000,
+    "train_seed_offset": 200_000,
+    "validation_eval_mode": True,
+    "ignorance_ood_weight": 0.2,
+    "ignorance_pred_weight": 0.2,
+    "classifier_weight": 0.25,
+    "alignment_prediction_weight": 1.0,
+    "alignment_embedding_weight": 0.5,
+    "alignment_mse_weight": 0.25,
+    "ranking_margin_weight": 0.0,
+    "ranking_margin": 0.2,
+    "ranking_focal_gamma": 0.0,
+    "ranking_start_fraction": 0.0,
+    "ranking_ramp_fraction": 0.0,
+    "ranking_largest_only": False,
+    "use_retrieval_head": False,
+    "retrieval_head_dim": 0,
+    "retrieval_head_hidden_dim": 0,
+    "use_retrieval_facets": False,
+    "retrieval_num_facets": 0,
+    "retrieval_facet_dim": 0,
+    "retrieval_facet_hidden_dim": 0,
+    "retrieval_facet_separate_query_code": False,
+    "retrieval_facet_score_mode": "hard_maxsim",
+    "retrieval_facet_softmax_temperature": 0.1,
+    "retrieval_facet_loss_weight": 0.0,
+    "phase4_joint_training": False,
+    "champion_challenger_weight": 0.0,
+    "champion_challenger_margin": 0.05,
+    "champion_challenger_temperature": 0.1,
+    "champion_challenger_start_fraction": 0.0,
+    "champion_challenger_ramp_fraction": 0.0,
+}
+
+
+def phase4_signature(phase4_updates: dict[str, Any]) -> str:
+    normalized = copy.deepcopy(PHASE4_SIGNATURE_DEFAULTS)
+    for key, value in phase4_updates.items():
+        if key in normalized:
+            normalized[key] = value
+    normalized["sizes"] = [int(size) for size in normalized["sizes"]]
+    return json.dumps(normalized, sort_keys=True)
+
+
+def existing_phase4_signatures_by_seed(history_rows: list[dict[str, str]]) -> set[tuple[int, str]]:
+    signatures: set[tuple[int, str]] = set()
+    for row in history_rows:
+        if row.get("status") != "ok":
+            continue
+        run_id = row.get("run_id", "")
+        if not run_id:
+            continue
+        results = load_run_results(run_id)
+        if results is None:
+            continue
+        phase4_result = results.get("phase4", {})
+        if phase4_result.get("validation_eval_mode") is not True:
+            continue
+        config = load_run_config(run_id)
+        if config is None:
+            continue
+        seed = config.get("seed")
+        phase4_config = config.get("phase4")
+        if seed is None or phase4_config is None:
+            continue
+        signatures.add((int(seed), phase4_signature(phase4_config)))
+    return signatures
+
+
 def dedupe_sorted(values: list[float]) -> list[float]:
     deduped: list[float] = []
     for value in sorted(values):
@@ -973,8 +1075,11 @@ def robustness_queue(
         return []
 
     queue: list[Experiment] = []
+    completed_signatures = existing_phase4_signatures_by_seed(history_rows)
+    scheduled_signatures: set[tuple[int, str]] = set()
     for family_exp in families:
         family_name = family_exp.name
+        family_signature = phase4_signature(family_exp.updates.get("phase4", {}))
         existing = family_rows.get(family_name, [])
         existing_seeds = {
             robust_seed_from_description(row.get("description", ""))
@@ -986,9 +1091,13 @@ def robustness_queue(
             description = f"{family_name} seed{seed}"
             if description in successful_descriptions:
                 continue
+            signature_key = (seed, family_signature)
+            if signature_key in completed_signatures or signature_key in scheduled_signatures:
+                continue
             updates = copy.deepcopy(family_exp.updates)
             updates["seed"] = seed
             queue.append(Experiment(description, updates))
+            scheduled_signatures.add(signature_key)
         if queue:
             return queue
     return queue
@@ -1007,15 +1116,22 @@ def final_confirmation_queue(history_rows: list[dict[str, str]]) -> list[Experim
     }
 
     queue: list[Experiment] = []
+    completed_signatures = existing_phase4_signatures_by_seed(history_rows)
+    scheduled_signatures: set[tuple[int, str]] = set()
     for family in families:
+        family_signature = phase4_signature(family.updates.get("phase4", {}))
         seeds = family_seeds[family.name]
         for seed in seeds:
             description = f"{family.name} seed{seed}"
             if description in successful_descriptions:
                 continue
+            signature_key = (seed, family_signature)
+            if signature_key in completed_signatures or signature_key in scheduled_signatures:
+                continue
             updates = copy.deepcopy(family.updates)
             updates["seed"] = seed
             queue.append(Experiment(description, updates))
+            scheduled_signatures.add(signature_key)
     return queue
 
 
@@ -1026,14 +1142,18 @@ def production_readiness_queue(history_rows: list[dict[str, str]]) -> list[Exper
         for row in history_rows
         if row.get("status") == "ok"
     }
+    completed_signatures = existing_phase4_signatures_by_seed(history_rows)
 
     for family in families:
+        family_signature = phase4_signature(family.updates.get("phase4", {}))
         stress_missing: list[Experiment] = []
         stress_rows: list[dict[str, str]] = []
         for seed in PRODUCTION_STRESS_SEEDS:
             description = f"{family.name} seed{seed}"
             row = rows_by_description.get(description)
             if row is None:
+                if (seed, family_signature) in completed_signatures:
+                    continue
                 updates = copy.deepcopy(family.updates)
                 updates["seed"] = seed
                 stress_missing.append(Experiment(description, updates))
@@ -1058,6 +1178,8 @@ def production_readiness_queue(history_rows: list[dict[str, str]]) -> list[Exper
             description = f"{family.name} seed{seed}"
             row = rows_by_description.get(description)
             if row is None:
+                if (seed, family_signature) in completed_signatures:
+                    continue
                 updates = copy.deepcopy(family.updates)
                 updates["seed"] = seed
                 confirmation_missing.append(Experiment(description, updates))
@@ -1086,18 +1208,25 @@ def production_readiness_full_queue(history_rows: list[dict[str, str]]) -> list[
         for row in history_rows
         if row.get("status") == "ok"
     }
+    completed_signatures = existing_phase4_signatures_by_seed(history_rows)
+    scheduled_signatures: set[tuple[int, str]] = set()
 
     queue: list[Experiment] = []
     for family in families:
+        family_signature = phase4_signature(family.updates.get("phase4", {}))
         stress_missing: list[Experiment] = []
         stress_rows: list[dict[str, str]] = []
         for seed in PRODUCTION_STRESS_SEEDS:
             description = f"{family.name} seed{seed}"
             row = rows_by_description.get(description)
             if row is None:
+                signature_key = (seed, family_signature)
+                if signature_key in completed_signatures or signature_key in scheduled_signatures:
+                    continue
                 updates = copy.deepcopy(family.updates)
                 updates["seed"] = seed
                 stress_missing.append(Experiment(description, updates))
+                scheduled_signatures.add(signature_key)
             else:
                 stress_rows.append(row)
         if stress_missing:
@@ -1118,9 +1247,13 @@ def production_readiness_full_queue(history_rows: list[dict[str, str]]) -> list[
             description = f"{family.name} seed{seed}"
             if description in rows_by_description:
                 continue
+            signature_key = (seed, family_signature)
+            if signature_key in completed_signatures or signature_key in scheduled_signatures:
+                continue
             updates = copy.deepcopy(family.updates)
             updates["seed"] = seed
             queue.append(Experiment(description, updates))
+            scheduled_signatures.add(signature_key)
     return queue
 
 

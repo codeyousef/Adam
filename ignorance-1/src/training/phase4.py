@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 
 import torch
@@ -9,6 +10,11 @@ import torch.nn.functional as F
 from src.losses.alignment import ignorance_penalty, paired_alignment_loss
 from src.models.jepa import JEPAConfig, JEPAModel, approximate_model_params
 from src.utils.data import SimpleTokenizer, make_text_code_pairs, sample_ood_queries
+
+
+# Collapse detection: if code-query offdiag similarity > this threshold for N consecutive steps, abort training
+COLLAPSE_OFFDIAG_THRESH = 0.95
+COLLAPSE_CONSECUTIVE_STEPS = 3
 
 
 def _mean(values: list[float]) -> float:
@@ -289,6 +295,34 @@ def _scaled_training_hparams(config, requested_size: int) -> tuple[int, float, f
     return scaled_steps, scaled_lr, step_multiplier, lr_divisor
 
 
+def _update_ema_model(ema_model: torch.nn.Module, model: torch.nn.Module, decay: float = 0.999) -> None:
+    """Update EMA model parameters using exponential moving average."""
+    with torch.no_grad():
+        for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+            ema_p.data.mul_(decay).add_(p.data, alpha=1.0 - decay)
+
+
+def _lr_multiplier(
+    step: int,
+    total_steps: int,
+    scheduler: str = "cosine",
+    warmup_fraction: float = 0.15,
+    min_lr_ratio: float = 0.2,
+) -> float:
+    """Compute LR multiplier for a given step. Supports cosine, linear, and constant schedules."""
+    warmup_steps = int(total_steps * warmup_fraction)
+    if step < warmup_steps:
+        return max(1e-6, step / max(warmup_steps, 1))
+    if scheduler == "cosine":
+        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+    elif scheduler == "linear":
+        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+        return max(min_lr_ratio, 1.0 - progress)
+    else:  # constant
+        return 1.0
+
+
 def run_phase4(config, device: str) -> dict:
     tokenizer = SimpleTokenizer(vocab_size=4096)
     results: dict[int, dict] = {}
@@ -306,13 +340,35 @@ def run_phase4(config, device: str) -> dict:
 
         for train_pairs, val_pairs in shared_splits:
             model = JEPAModel(model_config).to(device)
-            optimizer = torch.optim.AdamW(model.parameters(), lr=scaled_lr)
+
+            # Warm-start: load phase3 weights from checkpoint before training
+            warm_start_path = getattr(config, "warm_start_model_path", None)
+            if warm_start_path and os.path.exists(warm_start_path):
+                warm_state = torch.load(warm_start_path, map_location=device, weights_only=True)
+                model_state = model.state_dict()
+                loaded, skipped = 0, 0
+                for key in warm_state:
+                    if key in model_state and model_state[key].shape == warm_state[key].shape:
+                        model_state[key] = warm_state[key]
+                        loaded += 1
+                    else:
+                        skipped += 1
+                model.load_state_dict(model_state)
+                print(f"[phase4] warm-start loaded {loaded} tensors, skipped {skipped} from {warm_start_path}")
+
+            freeze_backbone = getattr(config, "freeze_backbone", False)
+            if freeze_backbone:
+                for name, param in model.named_parameters():
+                    if "encoder" in name or "predictor" in name:
+                        param.requires_grad = False
+            trainable_params = [p for p in model.parameters() if p.requires_grad]
+            optimizer = torch.optim.AdamW(trainable_params, lr=scaled_lr)
             negative_queue = torch.empty(0, model_config.embed_dim, device=device)
             torch.cuda.reset_peak_memory_stats() if device.startswith("cuda") else None
             start = time.time()
             final_loss = 0.0
             train_curve: list[float] = []
-
+            collapse_count = 0
             for step in range(scaled_steps):
                 batch_pairs = [train_pairs[(step * config.batch_size + offset) % len(train_pairs)] for offset in range(config.batch_size)]
                 texts = tokenizer.batch_encode([pair[0] for pair in batch_pairs], model_config.max_seq_len, device)
@@ -329,10 +385,25 @@ def run_phase4(config, device: str) -> dict:
                 code_candidates = torch.cat([z_code.detach(), negative_queue], dim=0) if negative_queue.numel() else z_code.detach()
                 clf_loss = F.binary_cross_entropy_with_logits(coding_logits, torch.ones_like(coding_logits))
                 clf_loss = clf_loss + F.binary_cross_entropy_with_logits(ood_logits, torch.zeros_like(ood_logits))
-                loss = loss + 0.2 * ignorance_penalty(z_ood, code_candidates) + 0.2 * ignorance_penalty(z_ood_pred, code_candidates) + 0.25 * clf_loss
+                ood_w = getattr(config, "loss_ood_weight", 0.2)
+                ood_pred_w = getattr(config, "loss_ood_pred_weight", 0.2)
+                clf_w = getattr(config, "loss_clf_weight", 0.25)
+                loss = loss + ood_w * ignorance_penalty(z_ood, code_candidates) + ood_pred_w * ignorance_penalty(z_ood_pred, code_candidates) + clf_w * clf_loss
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
+
+                # Collapse detection: compute code-query offdiag similarity
+                offdiag = float((z_text @ z_code.T).diag().mean().detach().cpu())
+                if offdiag > COLLAPSE_OFFDIAG_THRESH:
+                    collapse_count += 1
+                else:
+                    collapse_count = 0
+                if collapse_count >= COLLAPSE_CONSECUTIVE_STEPS:
+                    final_loss = float(loss.detach().cpu().item())
+                    train_curve.append(final_loss)
+                    break  # early stop — collapse detected
+
                 negative_queue = torch.cat([z_code.detach(), negative_queue], dim=0)[: max(config.batch_size * 64, 256)]
                 final_loss = float(loss.detach().cpu().item())
                 train_curve.append(final_loss)
@@ -355,7 +426,10 @@ def run_phase4(config, device: str) -> dict:
                     code_candidates = torch.cat([z_code.detach(), negative_queue], dim=0) if negative_queue.numel() else z_code.detach()
                     clf_loss = F.binary_cross_entropy_with_logits(coding_logits, torch.ones_like(coding_logits))
                     clf_loss = clf_loss + F.binary_cross_entropy_with_logits(ood_logits, torch.zeros_like(ood_logits))
-                    val_loss = val_loss + 0.2 * ignorance_penalty(z_ood, code_candidates) + 0.2 * ignorance_penalty(z_ood_pred, code_candidates) + 0.25 * clf_loss
+                    ood_w = getattr(config, "loss_ood_weight", 0.2)
+                    ood_pred_w = getattr(config, "loss_ood_pred_weight", 0.2)
+                    clf_w = getattr(config, "loss_clf_weight", 0.25)
+                    val_loss = val_loss + ood_w * ignorance_penalty(z_ood, code_candidates) + ood_pred_w * ignorance_penalty(z_ood_pred, code_candidates) + clf_w * clf_loss
                     val_losses.append(float(val_loss.detach().cpu().item()))
 
             split_final_losses.append(final_loss)

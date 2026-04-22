@@ -1,6 +1,6 @@
 seed: 42
 device: cuda
-profile: production_candidate
+profile: production_winning_candidate
 
 phase1:
   embed_dim: 384
@@ -33,14 +33,42 @@ phase3:
   tasks: 3
 
 phase4:
-  sizes: [15000000, 40000000, 80000000, 150000000, 300000000, 600000000, 1200000000]
+  sizes: [300000000, 600000000, 1200000000]
   steps: 112
   batch_size: 4
   lr: 0.00005
   max_vram_gb: 22.0
   num_splits: 7
+  phase4_dataset: behavioral_constraints_v2_rigorous
+  phase4_balance_families: true
   proxy_recipe: v5_distinct
+  reference_size: 300000000
   step_scale_power: 0.55
   max_step_multiplier: 5.0
   lr_scale_power: 0.2
   max_lr_divisor: 2.5
+  grad_accum_steps: 4
+  common_random_numbers: true
+  split_seed_stride: 1000
+  data_seed_offset: 0
+  init_seed_offset: 100000
+  train_seed_offset: 200000
+  validation_eval_mode: true
+  ignorance_ood_weight: 0.2
+  ignorance_pred_weight: 0.2
+  classifier_weight: 0.25
+  alignment_prediction_weight: 1.0
+  alignment_embedding_weight: 0.5
+  alignment_mse_weight: 0.25
+  ranking_margin_weight: 0.0
+  ranking_margin: 0.2
+  ranking_focal_gamma: 0.0
+  ranking_start_fraction: 0.0
+  ranking_ramp_fraction: 0.0
+  ranking_largest_only: false
+  phase4_joint_training: true
+  champion_challenger_weight: 0.5
+  champion_challenger_margin: 0.05
+  champion_challenger_temperature: 0.1
+  champion_challenger_start_fraction: 0.3
+  champion_challenger_ramp_fraction: 0.2

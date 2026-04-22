@@ -8,15 +8,32 @@ import torch.nn.functional as F
 from src.losses.alignment import paired_alignment_loss
 from src.losses.sigreg import collapse_detected, gaussian_projection_p_value, isotropic_score, sigreg_loss
 from src.models.jepa import JEPAConfig, JEPAModel
-from src.utils.data import SimpleTokenizer, make_text_code_pairs
+from src.utils.data import BenchmarkTokenizer, make_benchmark_text_code_pairs
+
+
+def _phase1_log(message: str) -> None:
+    print(message, flush=True)
+
+
+def _progress_points(total_steps: int) -> set[int]:
+    if total_steps <= 1:
+        return {0}
+    fractions = [0.25, 0.5, 0.75, 1.0]
+    return {min(total_steps - 1, max(0, int(total_steps * fraction) - 1)) for fraction in fractions}
 
 
 def run_phase1(config, device: str) -> dict:
-    tokenizer = SimpleTokenizer(vocab_size=config.vocab_size)
-    pairs = make_text_code_pairs(repeats=max(config.batch_size * 4, 64))
+    tokenizer = BenchmarkTokenizer(vocab_size=config.vocab_size)
+    pairs = make_benchmark_text_code_pairs(repeats=max(config.batch_size * 4, 64))
     results: dict[float, dict] = {}
+    progress_points = _progress_points(config.steps)
+
+    _phase1_log(
+        f"[phase1] lambdas={len(config.lambdas)} steps={config.steps} batch_size={config.batch_size}"
+    )
 
     for lambda_reg in config.lambdas:
+        _phase1_log(f"[phase1] lambda={lambda_reg} training")
         model = JEPAModel(
             JEPAConfig(
                 vocab_size=config.vocab_size,
@@ -52,6 +69,10 @@ def run_phase1(config, device: str) -> dict:
             loss.backward()
             optimizer.step()
             losses.append(float(loss.detach().cpu().item()))
+            if step in progress_points:
+                _phase1_log(
+                    f"[phase1] lambda={lambda_reg} step={step + 1}/{config.steps} loss={losses[-1]:.4f}"
+                )
 
         with torch.no_grad():
             eval_count = min(len(pairs), max(config.batch_size * 4, 64))
@@ -77,6 +98,9 @@ def run_phase1(config, device: str) -> dict:
             "gaussian_pass": p_value > 0.05,
             "collapse_detected": collapsed,
         }
+        _phase1_log(
+            f"[phase1] lambda={lambda_reg} done final_loss={losses[-1]:.4f} iso={iso:.3f} gaussian_p={p_value:.3f}"
+        )
 
     valid = [value for value, details in results.items() if details["converged"] and details["isotropic"] and not details["collapse_detected"]]
     return {

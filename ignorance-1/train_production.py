@@ -1,5 +1,6 @@
 from __future__ import annotations
 import copy
+import os
 import random
 import torch
 import torch.nn.functional as F
@@ -198,6 +199,9 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
     spread_weight = float(getattr(config, "spread_weight", 0.1))
     query_spread_weight = float(getattr(config, "query_spread_weight", 0.0))
     pred_spread_weight = float(getattr(config, "pred_spread_weight", 0.0))
+    sigreg_weight = float(getattr(config, "sigreg_weight", 0.0))
+    prediction_margin_weight = float(getattr(config, "prediction_margin_weight", 0.0))
+    embedding_margin_weight = float(getattr(config, "embedding_margin_weight", 0.0))
     use_vicreg_retrieval = bool(getattr(config, "use_vicreg_retrieval", False))
     vicreg_weight = float(getattr(config, "vicreg_weight", 0.0))
     vicreg_invariance_weight = float(getattr(config, "vicreg_invariance_weight", 1.0))
@@ -276,6 +280,45 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
         model_config.decoder_hidden_dim = decoder_hidden_dim_override
     if max_seq_len_override > 0:
         model_config.max_seq_len = max_seq_len_override
+
+    # Propagate retrieval and late-interaction config flags to JEPAConfig
+    model_config.use_retrieval_head = bool(getattr(config, "use_retrieval_head", False))
+    model_config.retrieval_head_dim = int(getattr(config, "retrieval_head_dim", 0) or 0)
+    model_config.retrieval_head_hidden_dim = int(getattr(config, "retrieval_head_hidden_dim", 0) or 0)
+    model_config.use_retrieval_facets = bool(getattr(config, "use_retrieval_facets", False))
+    model_config.retrieval_num_facets = int(getattr(config, "retrieval_num_facets", 0) or 0)
+    model_config.retrieval_facet_dim = int(getattr(config, "retrieval_facet_dim", 0) or 0)
+    model_config.retrieval_facet_hidden_dim = int(getattr(config, "retrieval_facet_hidden_dim", 0) or 0)
+    model_config.retrieval_facet_separate_query_code = bool(getattr(config, "retrieval_facet_separate_query_code", False))
+    model_config.retrieval_facet_score_mode = str(getattr(config, "retrieval_facet_score_mode", "softmax_maxsim"))
+    model_config.retrieval_facet_softmax_temperature = float(getattr(config, "retrieval_facet_softmax_temperature", 0.1))
+    model_config.use_gated_reranker = bool(getattr(config, "use_gated_reranker", False))
+    model_config.late_interaction_verifier_weight = float(getattr(config, "late_interaction_verifier_weight", 0.0))
+    model_config.late_interaction_verifier_margin = float(getattr(config, "late_interaction_verifier_margin", 0.0))
+    model_config.late_interaction_verifier_mode = str(getattr(config, "late_interaction_verifier_mode", "hard_maxsim"))
+    model_config.late_interaction_verifier_softmax_temperature = float(getattr(config, "late_interaction_verifier_softmax_temperature", 0.1))
+    model_config.late_interaction_verifier_start_step = int(getattr(config, "late_interaction_verifier_start_step", 0) or 0)
+    model_config.vicreg_weight = float(getattr(config, "vicreg_weight", 0.0))
+    model_config.vicreg_covariance_weight = float(getattr(config, "vicreg_covariance_weight", 0.0))
+    model_config.vicreg_variance_target = float(getattr(config, "vicreg_variance_target", 0.75))
+    model_config.rank_reg_weight = float(getattr(config, "rank_reg_weight", 0.0))
+    model_config.rank_reg_eps = float(getattr(config, "rank_reg_eps", 1e-4))
+    model_config.rank_reg_target = str(getattr(config, "rank_reg_target", "code+query"))
+    model_config.use_vicreg_retrieval = bool(getattr(config, "use_vicreg_retrieval", False))
+    model_config.vicreg_queue_samples = int(getattr(config, "vicreg_queue_samples", 0) or 0)
+    model_config.use_momentum_queue = bool(getattr(config, "use_momentum_queue", False))
+    model_config.momentum_queue_weight = float(getattr(config, "momentum_queue_weight", 0.0))
+    # Additional v378-era flags found in v378_launch.log
+    model_config.freeze_backbone = bool(getattr(config, "freeze_backbone", False))
+    model_config.epistemic_boundary_weight = float(getattr(config, "epistemic_boundary_weight", 0.0))
+    model_config.epistemic_margin = float(getattr(config, "epistemic_margin", 0.0))
+    model_config.epistemic_query_weight = float(getattr(config, "epistemic_query_weight", 0.0))
+    model_config.epistemic_prediction_weight = float(getattr(config, "epistemic_prediction_weight", 0.0))
+    model_config.classifier_query_weight = float(getattr(config, "classifier_query_weight", 1.0))
+    model_config.classifier_prediction_weight = float(getattr(config, "classifier_prediction_weight", 0.0))
+    model_config.pred_ood_weight = float(getattr(config, "pred_ood_weight", 0.0))
+    model_config.use_phase4_contrast_data = bool(getattr(config, "use_phase4_contrast_data", False))
+
     scaled_steps, scaled_lr, step_mult, lr_div = _scaled_training_hparams(config, size)
     
     print(f"Training production model: {size:,} params (proxy: {approximate_model_params(model_config):,})")
@@ -302,8 +345,9 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
     print(
         "Retrieval shaping: "
         f"margin={retrieval_margin:.2f}, margin_weight={retrieval_margin_weight:.2f}, "
+        f"prediction_margin_weight={prediction_margin_weight:.2f}, embedding_margin_weight={embedding_margin_weight:.2f}, "
         f"spread_weight={spread_weight:.2f}, query_spread_weight={query_spread_weight:.2f}, "
-        f"pred_spread_weight={pred_spread_weight:.2f}, ema_target_decay={ema_target_decay:.4f}, "
+        f"pred_spread_weight={pred_spread_weight:.2f}, sigreg_weight={sigreg_weight:.2f}, ema_target_decay={ema_target_decay:.4f}, "
         f"alignment_temperature={alignment_temperature:.3f}"
     )
     print(
@@ -403,10 +447,56 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
         prototype_table = torch.nn.Embedding(len(prototype_to_idx), model_config.embed_dim, device=device)
         torch.nn.init.normal_(prototype_table.weight, mean=0.0, std=0.02)
 
-    optimization_params = list(model.parameters())
+    # Warm-start from phase3 checkpoint
+    warm_start_path = getattr(config, "warm_start_model_path", None) or getattr(config, "warm_start_path", None)
+    warm_start_phase3_only = bool(getattr(config, "warm_start_phase3_only", False))
+    if warm_start_path and os.path.exists(warm_start_path):
+        print(f"Loading warm-start checkpoint from {warm_start_path}")
+        ckpt = torch.load(warm_start_path, map_location=device, weights_only=False)
+        state_dict = ckpt.get("model_state_dict", ckpt)
+        # Filter to only matching keys (skip shape mismatches)
+        loaded_keys = {}
+        skipped_keys = []
+        for k, v in state_dict.items():
+            if any(k.startswith(p) for p in ["encoder.", "predictor.", "decoder."]):
+                if k in model.state_dict():
+                    model_v = model.state_dict()[k]
+                    if model_v.shape == v.shape:
+                        loaded_keys[k] = v
+                    else:
+                        skipped_keys.append(f"{k}: {v.shape} vs {model_v.shape}")
+                else:
+                    skipped_keys.append(f"{k}: not in model")
+        missing_unexpected = {}
+        if loaded_keys:
+            missing_unexpected = model.load_state_dict(loaded_keys, strict=False)
+        print(f"  Loaded {len(loaded_keys)} matching keys, skipped {len(skipped_keys)} mismatches")
+        if skipped_keys[:3]:
+            for s in skipped_keys[:3]:
+                print(f"    SKIP: {s}")
+        if missing_unexpected:
+            print(f"  load_state_dict: missing={len(missing_unexpected[0])}, unexpected={len(missing_unexpected[1])}")
+        if warm_start_phase3_only:
+            print("  Phase3-only warm-start: will freeze encoder/predictor/decoder")
+
+    # Freeze backbone if requested
+    if getattr(config, "freeze_backbone", False) or warm_start_phase3_only:
+        print("Freezing encoder backbone (phase4 warm-start mode)")
+        for name, param in model.named_parameters():
+            if "encoder" in name or "predictor" in name or "decoder" in name:
+                param.requires_grad = False
+        # Ensure query_head and retrieval heads remain trainable
+        for name, param in model.named_parameters():
+            if "query_head" in name or "retrieval_head" in name or "late_inter" in name or "gated_rerank" in name or "retrieval_facet" in name or "prototype" in name:
+                param.requires_grad = True
+
+    optimization_params = list(filter(lambda p: p.requires_grad, model.parameters()))
     if prototype_table is not None:
         optimization_params.extend(prototype_table.parameters())
     optimizer = optimizer_cls(optimization_params, lr=scaled_lr)
+    frozen_params = sum(1 for p in model.parameters() if not p.requires_grad)
+    trainable_params = len(optimization_params)
+    print(f"Optimizer: {optimizer_name} ({trainable_params} trainable params, {frozen_params} frozen)")
     
     model.train()
     pbar = tqdm(total=scaled_steps, desc="Training")
@@ -430,7 +520,9 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
         current_spread_weight = spread_weight * regularizer_scale
         current_query_spread_weight = query_spread_weight * regularizer_scale
         current_pred_spread_weight = pred_spread_weight * regularizer_scale
-        current_sigreg_weight = 0.5 * regularizer_scale
+        current_sigreg_weight = sigreg_weight * regularizer_scale
+        current_prediction_margin_weight = prediction_margin_weight * regularizer_scale
+        current_embedding_margin_weight = embedding_margin_weight * regularizer_scale
         current_rank_reg_weight = rank_reg_weight * regularizer_scale
         current_vicreg_weight = vicreg_weight * regularizer_scale
         current_query_margin_weight = query_margin_weight * regularizer_scale
@@ -697,6 +789,24 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                             negative_pool=query_buffer.get(),
                             margin=query_margin,
                         )
+                    # prediction_margin: pred vs positive codes vs negative pool
+                    prediction_margin_loss = z_text.new_tensor(0.0)
+                    if current_prediction_margin_weight > 0.0:
+                        prediction_margin_loss = retrieval_margin_loss(
+                            z_pred,
+                            z_code,
+                            negative_pool=negative_pool,
+                            margin=retrieval_margin,
+                        )
+                    # embedding_margin: text vs positive codes vs negative pool
+                    embedding_margin_loss = z_text.new_tensor(0.0)
+                    if current_embedding_margin_weight > 0.0:
+                        embedding_margin_loss = retrieval_margin_loss(
+                            z_text,
+                            z_code,
+                            negative_pool=negative_pool,
+                            margin=retrieval_margin,
+                        )
                     micro_loss = (
                         pred_loss
                         + current_margin_weight * margin_loss
@@ -711,10 +821,14 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                         + current_spread_weight * spread_loss
                         + current_query_spread_weight * query_spread_loss
                         + current_pred_spread_weight * pred_spread_loss
+                        + current_prediction_margin_weight * prediction_margin_loss
+                        + current_embedding_margin_weight * embedding_margin_loss
                     )
                 else:
                     rank_reg_loss = z_text.new_tensor(0.0)
                     query_margin_loss = z_text.new_tensor(0.0)
+                    prediction_margin_loss = z_text.new_tensor(0.0)
+                    embedding_margin_loss = z_text.new_tensor(0.0)
                     micro_loss = (
                         pred_loss
                         + current_margin_weight * margin_loss
@@ -725,6 +839,8 @@ def train_production(config_path: str, size: int, output_path: str, device: str)
                         + current_clf_weight * clf_loss
                         + current_rank_reg_weight * rank_reg_loss
                         + current_query_margin_weight * query_margin_loss
+                        + current_prediction_margin_weight * prediction_margin_loss
+                        + current_embedding_margin_weight * embedding_margin_loss
                     )
 
             num_microbatches += 1

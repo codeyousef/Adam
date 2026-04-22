@@ -19,26 +19,26 @@ phase1:
 
 phase2:
   batch_size: 8
-  epochs: 80
-  lr: 0.0005
+  epochs: 500
+  lr: 0.0003
   retrieval_k: 1
   answer_threshold: 0.2
   direct_penalty: 0.25
 
 phase3:
-  horizon: 4
-  num_samples: 48
-  num_elites: 8
-  num_iterations: 5
-  tasks: 3
+  horizon: 6
+  num_samples: 128
+  num_elites: 16
+  num_iterations: 10
+  tasks: 5
 
 phase4:
-  sizes: [15000000, 80000000, 300000000, 600000000, 1200000000]
+  sizes: [15000000, 40000000, 80000000, 150000000, 300000000, 600000000, 1200000000]
   steps: 112
   batch_size: 4
-  lr: 0.00006
+  lr: 0.00005
   max_vram_gb: 22.0
-  num_splits: 5
+  num_splits: 7
   proxy_recipe: v5_distinct
   step_scale_power: 0.55
   max_step_multiplier: 5.0

@@ -448,6 +448,64 @@ def multi_step_tasks() -> list[FactSample]:
     return list(MULTI_STEP_TASKS)
 
 
+@dataclass
+class RetrievalTrainingExample:
+    """A training example for retrieval with optional hard negatives."""
+    query: str
+    code: str
+    hard_negatives: list[str]
+    family: str
+
+
+def make_retrieval_training_examples(
+    repeats: int = 256,
+    benchmark_repeats: int = 128,
+    max_hard_negatives: int = 4,
+    use_surface_code_variants: bool = False,
+    seed: int = 42,
+) -> list[RetrievalTrainingExample]:
+    """Build retrieval training examples from the synthetic dataset."""
+    random.seed(seed)
+    primary_pairs = make_text_code_pairs(repeats=repeats)
+    benchmark_pairs = make_benchmark_text_code_pairs(repeats=benchmark_repeats)
+    all_pairs = primary_pairs + benchmark_pairs
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_pairs = []
+    for p in all_pairs:
+        if p not in seen:
+            seen.add(p)
+            unique_pairs.append(p)
+    random.shuffle(unique_pairs)
+
+    examples = []
+    for query, code in unique_pairs:
+        # Group hard negatives from same family (different code)
+        family = query.split("___")[0] if "___" in query else "unknown"
+        hard_neg_candidates = [
+            c for (q, c) in unique_pairs
+            if q.split("___")[0] == family and c != code
+        ]
+        random.shuffle(hard_neg_candidates)
+        hard_negs = hard_neg_candidates[:max_hard_negatives]
+        examples.append(RetrievalTrainingExample(
+            query=query,
+            code=code,
+            hard_negatives=hard_negs,
+            family=family,
+        ))
+    return examples
+
+
+def make_benchmark_text_code_pairs(repeats: int = 256) -> list[tuple[str, str]]:
+    """Make a held-out set of text-code pairs for benchmarking."""
+    # Use a fixed seed so this is deterministic and doesn't overlap with training
+    rng = random.Random(42)
+    pairs = make_text_code_pairs(repeats=max(repeats // 10, 8))
+    rng.shuffle(pairs)
+    return pairs[:repeats]
+
+
 def sample_ood_queries(count: int) -> list[str]:
     if count <= 0:
         return []

@@ -4,11 +4,22 @@ import torch
 import torch.nn.functional as F
 
 from src.models.jepa import JEPAConfig, JEPAModel
-from src.utils.data import SimpleTokenizer, coding_facts
+from src.utils.data import BenchmarkTokenizer, coding_facts
 from src.utils.retrieval import VectorIndex
 
 
-def _build_index(model: JEPAModel, tokenizer: SimpleTokenizer, facts, seq_len: int, device: str) -> VectorIndex:
+def _phase2_log(message: str) -> None:
+    print(message, flush=True)
+
+
+def _progress_points(total_steps: int) -> set[int]:
+    if total_steps <= 1:
+        return {0}
+    fractions = [0.25, 0.5, 0.75, 1.0]
+    return {min(total_steps - 1, max(0, int(total_steps * fraction) - 1)) for fraction in fractions}
+
+
+def _build_index(model: JEPAModel, tokenizer: BenchmarkTokenizer, facts, seq_len: int, device: str) -> VectorIndex:
     doc_ids = []
     embeddings = []
     with torch.no_grad():
@@ -22,7 +33,7 @@ def _build_index(model: JEPAModel, tokenizer: SimpleTokenizer, facts, seq_len: i
 def run_phase2(config, phase1_result: dict, device: str) -> dict:
     seq_len = 128
     vocab_size = 4096
-    tokenizer = SimpleTokenizer(vocab_size=vocab_size)
+    tokenizer = BenchmarkTokenizer(vocab_size=vocab_size)
     model = JEPAModel(
         JEPAConfig(
             vocab_size=vocab_size,
@@ -37,12 +48,17 @@ def run_phase2(config, phase1_result: dict, device: str) -> dict:
     ).to(device)
     facts = coding_facts()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+    progress_points = _progress_points(config.epochs)
+
+    _phase2_log(
+        f"[phase2] epochs={config.epochs} lr={config.lr} facts={len(facts)} batch_size={config.batch_size}"
+    )
 
     answer_ids = tokenizer.batch_encode([fact.answer for fact in facts], seq_len, device)
     question_ids = tokenizer.batch_encode([fact.question for fact in facts], seq_len, device)
     doc_ids = tokenizer.batch_encode([fact.doc for fact in facts], seq_len, device)
 
-    for _ in range(config.epochs):
+    for epoch in range(config.epochs):
         z_question = model.encode(question_ids)
         z_answer = model.encode(answer_ids)
         z_doc = model.encode(doc_ids)
@@ -55,6 +71,10 @@ def run_phase2(config, phase1_result: dict, device: str) -> dict:
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
+        if epoch in progress_points:
+            _phase2_log(
+                f"[phase2] epoch={epoch + 1}/{config.epochs} loss={float(loss.detach().cpu().item()):.4f}"
+            )
 
     index = _build_index(model, tokenizer, facts, seq_len, device)
 
@@ -76,6 +96,9 @@ def run_phase2(config, phase1_result: dict, device: str) -> dict:
     without = evaluate(False)
     with_retrieval = evaluate(True)
     gap = with_retrieval - without
+    _phase2_log(
+        f"[phase2] done without={without:.3f} with={with_retrieval:.3f} gap={gap:.3f}"
+    )
     return {
         "accuracy_without_retrieval": without,
         "accuracy_with_retrieval": with_retrieval,

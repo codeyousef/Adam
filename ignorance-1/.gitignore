@@ -1,0 +1,62 @@
+# === Build / Runtime ===
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# === Virtual Environments ===
+.venv/
+venv/
+
+# === IDE / Editor (parent project dir bleed) ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === Python / Research Helper Scripts (not part of project) ===
+_diagnose_*.py
+_inspect_*.py
+_check_*.py
+_verify_*.py
+*_smoke.py
+check_versions.py
+_overlay_*.py
+ADAM_TO_SINAI_HISTORY.md
+
+# === Experiment Configs (not committed - generated per-run) ===
+config/production_strict_retrieval*.yaml
+config/phase4_*.yaml
+config/production_v340_*.yaml
+config/production_winning_2*.yaml
+config/production_v413_equivalence_cc.yaml
+config/production_relative_v2.yaml
+
+# === Experiment Output Artifacts ===
+artifacts/
+strict_eval_autoresearch_v*/
+
+# === Hermes Agent State ===
+.hermes/
+
+# === Reports / Notes (keep local) ===
+OVERNIGHT_REPORT.md
+PHASE4_NEXT_DIRECTION_PLAN.md
+
+# === External Papers / PDFs (parent dir bleed) ===
+*.pdf
+
+# === Checkpoints / Model Weights ===
+*.pt
+*.ckpt
+*.pth
+*.safetensors
+
+# === Logs ===
+*.log
+
+# === Python lldb dump files ===
+*.dump

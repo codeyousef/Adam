@@ -1,0 +1,25 @@
+hypotheses:
+  - id: H1
+    description: The Phase 4 benchmark/proxy task is still too weak to expose the capability gap we care about.
+    confidence: 0.45
+    status: active
+    intervention_types: [benchmark_strengthening, evaluation_stress]
+    decisive_metrics: [mean_confidence_margin, mean_pairwise_win_rate]
+  - id: H2
+    description: The current Phase 4 objective does not optimize top-rung separation strongly enough.
+    confidence: 0.30
+    status: active
+    intervention_types: [separation_objective]
+    decisive_metrics: [mean_confidence_margin, largest_wins]
+  - id: H3
+    description: Ladder allocation / compute scaling is hiding the relevant separation signal.
+    confidence: 0.15
+    status: active
+    intervention_types: [allocation_change]
+    decisive_metrics: [mode_best_size, mean_pairwise_win_rate]
+  - id: H4
+    description: The evaluator/protocol is too noisy or mismatched to the answer we want.
+    confidence: 0.10
+    status: active
+    intervention_types: [evaluation_stress]
+    decisive_metrics: [mean_pairwise_margin_std, max_confidence_margin]

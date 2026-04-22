@@ -6,8 +6,12 @@ import torch
 import torch.nn.functional as F
 
 from src.models.jepa import JEPAConfig, JEPAModel
-from src.utils.data import SimpleTokenizer, multi_step_tasks
+from src.utils.data import BenchmarkTokenizer, multi_step_tasks
 from src.utils.retrieval import VectorIndex
+
+
+def _phase3_log(message: str) -> None:
+    print(message, flush=True)
 
 
 class CEMPlanner:
@@ -41,7 +45,7 @@ class CEMPlanner:
 
 def run_phase3(config, device: str) -> dict:
     seq_len = 128
-    tokenizer = SimpleTokenizer(vocab_size=4096)
+    tokenizer = BenchmarkTokenizer(vocab_size=4096)
     model = JEPAModel(JEPAConfig(max_seq_len=seq_len, predictor_layers=3, predictor_heads=6)).to(device)
     tasks = multi_step_tasks()[: config.tasks]
 
@@ -69,7 +73,12 @@ def run_phase3(config, device: str) -> dict:
     monotonic = 0
     traces = []
 
-    for task in tasks:
+    _phase3_log(
+        f"[phase3] tasks={len(tasks)} horizon={config.horizon} samples={config.num_samples} iterations={config.num_iterations}"
+    )
+
+    for task_index, task in enumerate(tasks, start=1):
+        _phase3_log(f"[phase3] task={task_index}/{len(tasks)} planning")
         current = tokenizer.batch_encode([task.question], seq_len, device)
         target = tokenizer.batch_encode([task.answer], seq_len, device)
         with torch.no_grad():
@@ -96,8 +105,15 @@ def run_phase3(config, device: str) -> dict:
         if any(doc_id in retrieved_ids for doc_id in task.solution_docs):
             successes += 1
 
+        _phase3_log(
+            f"[phase3] task={task_index}/{len(tasks)} success={int(any(doc_id in retrieved_ids for doc_id in task.solution_docs))} best_cost={energy_trace[-1]:.5f}"
+        )
+
     success_rate = successes / max(len(tasks), 1)
     monotonic_fraction = monotonic / max(len(tasks), 1)
+    _phase3_log(
+        f"[phase3] done success_rate={success_rate:.3f} monotonic={monotonic_fraction:.3f}"
+    )
     return {
         "planning_success_rate": success_rate,
         "passes": success_rate >= (2.0 / 3.0) and monotonic_fraction >= 0.9,

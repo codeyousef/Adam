@@ -128,9 +128,10 @@ def run_test(
     decoder_layers_override=0,
     decoder_heads_override=0,
     decoder_hidden_dim_override=0,
+    proxy_recipe="v6_overnight",
 ):
     device = "cpu" if force_cpu else ("cuda" if torch.cuda.is_available() else "cpu")
-    config = _proxy_config(size, "v6_overnight")
+    config = _proxy_config(size, proxy_recipe)
     if embed_dim_override > 0:
         config.embed_dim = embed_dim_override
     if encoder_layers_override > 0:
@@ -349,6 +350,7 @@ if __name__ == "__main__":
     parser.add_argument("--decoder-layers", type=int, default=0)
     parser.add_argument("--decoder-heads", type=int, default=0)
     parser.add_argument("--decoder-hidden-dim", type=int, default=0)
+    parser.add_argument("--proxy-recipe", type=str, default="v6_overnight")
     args = parser.parse_args()
 
     summary = run_test(
@@ -365,6 +367,7 @@ if __name__ == "__main__":
         decoder_layers_override=args.decoder_layers,
         decoder_heads_override=args.decoder_heads,
         decoder_hidden_dim_override=args.decoder_hidden_dim,
+        proxy_recipe=args.proxy_recipe,
     )
     if args.json:
         print(json.dumps(summary, indent=2))
